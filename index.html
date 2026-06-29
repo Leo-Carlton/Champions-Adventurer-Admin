@@ -79,8 +79,12 @@
       const results = fuzzySearch(q);
       if (!results.length) {
         list.innerHTML = `<li class="empty">No adventurers found.</li>`;
+        if (q.trim()) {
+          document.getElementById("newPlayerName").value = q.trim();
+        }
         return;
       }
+      document.getElementById("newPlayerName").value = "";
       list.innerHTML = results.map(p => {
         const cards = p.cards ?? 6;
         const lvl = calcLevel(cards, p.secretQuest);
@@ -205,8 +209,15 @@
     async function addNewPlayer() {
       const name = document.getElementById("newPlayerName").value.trim();
       if (!name) return;
-      const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
       const msg = document.getElementById("addMsg");
+      const duplicate = allPlayers.find(p => p.name.toLowerCase() === name.toLowerCase());
+      if (duplicate) {
+        msg.textContent = `"${duplicate.name}" is already enrolled.`;
+        msg.style.color = "#c0392b";
+        setTimeout(() => { msg.textContent = ""; }, 3000);
+        return;
+      }
+      const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
       try {
         await setDoc(doc(db, "players", id), { name, cards: 6, glory: 0, guild: "None", secretQuest: false });
         document.getElementById("newPlayerName").value = "";
