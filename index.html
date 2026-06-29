@@ -83,13 +83,29 @@
       // Pre-fill enrol only if the search term is not a prefix of any existing player name
       const isPrefix = allPlayers.some(p => p.name.toLowerCase().startsWith(q.trim().toLowerCase()));
       document.getElementById("newPlayerName").value = q.trim() && !isPrefix ? q.trim() : "";
+      const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
+      const guildColors = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
       list.innerHTML = results.map(p => {
         const cards = p.cards ?? 6;
         const lvl = calcLevel(cards, p.secretQuest);
+        const lvlColor = lvlColors[lvl] || "#c8b89a";
+        const guild = p.guild && p.guild !== "None" ? p.guild : null;
+        const guildColor = guildColors[guild] || "#9980bb";
+        const guildHtml = guild
+          ? `<span style="color:${guildColor}">${guild.toUpperCase()}</span>`
+          : `<span style="color:#555">NO GUILD</span>`;
         return `
         <li class="player-row" data-id="${p.id}">
           <span class="player-name">${p.name}</span>
-          <span class="player-meta">Lvl ${lvl} &nbsp;·&nbsp; ${cards} cards &nbsp;·&nbsp; ⭐ ${p.glory ?? 0} &nbsp;·&nbsp; ${p.guild || "No guild"}</span>
+          <span class="player-meta-new">
+            <span style="color:${lvlColor};font-size:22px;font-weight:700">${lvl}</span>
+            <span class="meta-dot">·</span>
+            <span style="font-size:20px">🃏</span><span style="font-size:18px">${cards}</span>
+            <span class="meta-dot">·</span>
+            <span style="font-size:20px">⭐</span><span style="color:#888;font-size:18px;font-weight:700">${p.glory ?? 0}</span>
+            <span class="meta-dot">·</span>
+            ${guildHtml}
+          </span>
         </li>`;
       }).join("");
       list.querySelectorAll(".player-row").forEach(el => {
@@ -516,6 +532,17 @@
       color: #e8d5ff;
     }
     .player-meta { font-size: 13px; color: #9980bb; text-align: right; }
+    .player-meta-new {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'Cinzel', serif;
+      font-weight: 700;
+      letter-spacing: 1px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .meta-dot { color: #4a3a6a; font-size: 16px; }
     .empty { padding: 20px; color: #6655aa; text-align: center; font-size: 15px; display: block; font-style: italic; }
 
     /* ── Player Editor Modal ── */
