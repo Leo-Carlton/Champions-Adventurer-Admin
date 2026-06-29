@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Festival Game Manager</title>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getFirestore, collection, doc, getDoc, getDocs,
+      setDoc, updateDoc, onSnapshot, query, orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAfQVHHJwA9_Cy60ZRMYP8Gb6vLeI3jdTo",
+      authDomain: "champions-adventurer-dat-d5c7a.firebaseapp.com",
+      projectId: "champions-adventurer-dat-d5c7a",
+      storageBucket: "champions-adventurer-dat-d5c7a.firebasestorage.app",
+      messagingSenderId: "706035740918",
+      appId: "1:706035740918:web:40665ca4d39d001efdbcd7"
+    };
+
+    const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
+
+    // Level thresholds: index = level, value = cards needed to REACH that level
+    // Lvl1 = 6 cards (starting), Lvl2 = 12, Lvl3 = 20, Lvl4 = 30, Lvl5 = secret quest
+    const LEVEL_THRESHOLDS = [0, 6, 12, 20, 30];
+
+    function calcLevel(cards, secretQuest) {
+      if (secretQuest && cards >= 30) return 5;
+      for (let lvl = 4; lvl >= 1; lvl--) {
+        if (cards >= LEVEL_THRESHOLDS[lvl]) return lvl;
+      }
+      return 1;
+    }
+
+    function cardsForNextLevel(level) {
+      if (level >= 4) return null; // next is secret quest
+      return LEVEL_THRESHOLDS[level + 1];
+    }
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const playersCol = collection(db, "players");
+
+    let allPlayers = [];
+    let selectedPlayer = null;
+    let activeTab = "search";
+    let activeGuildTab = null;
+
+    // ── Live listener ─────────────────────────────────────────────────────────
+    onSnapshot(query(playersCol, orderBy("name")), (snap) => {
+      allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (activeTab === "glory")       renderGloryLeaderboard();
+      if (activeTab === "guild")       renderGuildLeaderboard();
+      if (activeTab === "search")      renderResults(document.getElementById("searchInput").value);
+    });
+
+    // ── Fuzzy search ──────────────────────────────────────────────────────────
+    function score(name, q) {
+      name = name.toLowerCase(); q = q.toLowerCase();
+      if (name === q) return 1000;
+      if (name.startsWith(q)) return 500;
+      if (name.includes(q)) return 300;
+      let i = 0, matched = 0;
+      for (const ch of name) { if (i < q.length && ch === q[i]) { matched++; i++; } }
+      return matched / q.length * 100;
+    }
+
+    function fuzzySearch(q) {
+      if (!q.trim()) return allPlayers.slice(0, 40);
+      return allPlayers
+        .map(p => ({ ...p, _score: score(p.name, q) }))
+        .filter(p => p._score > 20)
+        .sort((a, b) => b._score - a._score)
+        .slice(0, 15);
+    }
+
+    // ── Render search results ─────────────────────────────────────────────────
+    function renderResults(q) {
+      const list = document.getElementById("resultsList");
+      const results = fuzzySearch(q);
+      if (!results.length) {
+        list.innerHTML = `<li class="empty">No players found.</li>`;
+        return;
+      }
+      list.innerHTML = results.map(p => {
+        const cards = p.cards ?? 6;
+        const lvl = calcLevel(cards, p.secretQuest);
+        return `
+        <li class="player-row" data-id="${p.id}">
+          <span class="player-name">${p.name}</span>
+          <span class="player-meta">Lvl ${lvl} &nbsp;·&nbsp; ${cards} cards &nbsp;·&nbsp; ⭐ ${p.glory ?? 0} &nbsp;·&nbsp; ${p.guild || "No guild"}</span>
+        </li>`;
+      }).join("");
+      list.querySelectorAll(".player-row").forEach(el => {
+        el.addEventListener("click", () => openPlayer(el.dataset.id));
+      });
+    }
+
+    // ── Open player editor ────────────────────────────────────────────────────
+    async function openPlayer(id) {
+      const snap = await getDoc(doc(db, "players", id));
+      selectedPlayer = { id: snap.id, ...snap.data() };
+      showEditor();
+    }
+
+    function showEditor() {
+      const p = selectedPlayer;
+      const cards = p.cards ?? 6;
+      const lvl = calcLevel(cards, p.secretQuest);
+
+      document.getElementById("editorName").textContent = p.name;
+      document.getElementById("editorCards").value = cards;
+      document.getElementById("editorGlory").value = p.glory ?? 0;
+      document.getElementById("editorGuild").value = p.guild || "None";
+      document.getElementById("editorMsg").textContent = "";
+
+      // Level display
+      updateLevelDisplay(cards, p.secretQuest);
+
+      // Secret quest button
+      const sqBtn = document.getElementById("secretQuestBtn");
+      if (p.secretQuest) {
+        sqBtn.textContent = "✔ Secret Quest Complete";
+        sqBtn.classList.add("sq-done");
+        sqBtn.disabled = true;
+      } else {
+        sqBtn.textContent = "🔐 Mark Secret Quest Complete";
+        sqBtn.classList.remove("sq-done");
+        sqBtn.disabled = false;
+      }
+
+      document.getElementById("playerEditor").classList.remove("hidden");
+      document.getElementById("editorCards").focus();
+    }
+
+    function updateLevelDisplay(cards, secretQuest) {
+      const lvl = calcLevel(cards, secretQuest);
+      const next = cardsForNextLevel(lvl);
+      const lvlEl = document.getElementById("levelDisplay");
+      let nextTxt = "";
+      if (lvl < 4) {
+        nextTxt = ` <span class="next-lvl">(${next - cards} more cards for Lvl ${lvl + 1})</span>`;
+      } else if (lvl === 4 && !secretQuest) {
+        nextTxt = ` <span class="next-lvl">(Complete secret quest for Lvl 5)</span>`;
+      }
+      lvlEl.innerHTML = `Level <strong>${lvl}</strong>${nextTxt}`;
+    }
+
+    // Live preview as cards input changes
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("editorCards").addEventListener("input", () => {
+        if (!selectedPlayer) return;
+        const cards = parseInt(document.getElementById("editorCards").value) || 0;
+        updateLevelDisplay(cards, selectedPlayer.secretQuest);
+      });
+    });
+
+    // ── Save player ───────────────────────────────────────────────────────────
+    async function savePlayer() {
+      const cards = parseInt(document.getElementById("editorCards").value) || 6;
+      const glory = parseInt(document.getElementById("editorGlory").value) || 0;
+      const guild = document.getElementById("editorGuild").value;
+      const msg = document.getElementById("editorMsg");
+
+      const oldCards = selectedPlayer.cards ?? 6;
+      const oldLvl = calcLevel(oldCards, selectedPlayer.secretQuest);
+      const newLvl = calcLevel(cards, selectedPlayer.secretQuest);
+
+      try {
+        await updateDoc(doc(db, "players", selectedPlayer.id), { cards, glory, guild });
+        selectedPlayer.cards = cards;
+        selectedPlayer.glory = glory;
+        selectedPlayer.guild = guild;
+
+        if (newLvl > oldLvl) {
+          showLevelUp(selectedPlayer.name, newLvl);
+        } else {
+          msg.textContent = "✔ Saved!";
+          msg.style.color = "#2a7a2a";
+          setTimeout(() => { msg.textContent = ""; }, 2000);
+        }
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#c0392b";
+      }
+    }
+
+    // ── Secret quest ──────────────────────────────────────────────────────────
+    async function completeSecretQuest() {
+      const cards = parseInt(document.getElementById("editorCards").value) || selectedPlayer.cards || 6;
+      if (cards < 30) {
+        const msg = document.getElementById("editorMsg");
+        msg.textContent = "Player needs 30 cards before completing the secret quest.";
+        msg.style.color = "#c0392b";
+        return;
+      }
+      try {
+        await updateDoc(doc(db, "players", selectedPlayer.id), { secretQuest: true });
+        selectedPlayer.secretQuest = true;
+        const sqBtn = document.getElementById("secretQuestBtn");
+        sqBtn.textContent = "✔ Secret Quest Complete";
+        sqBtn.classList.add("sq-done");
+        sqBtn.disabled = true;
+        updateLevelDisplay(cards, true);
+        showLevelUp(selectedPlayer.name, 5);
+      } catch (e) {
+        document.getElementById("editorMsg").textContent = "Error: " + e.message;
+      }
+    }
+
+    // ── Level up notification ─────────────────────────────────────────────────
+    function showLevelUp(name, level) {
+      const overlay = document.getElementById("levelUpOverlay");
+      document.getElementById("levelUpText").textContent = `${name} reached Level ${level}!`;
+      overlay.classList.remove("hidden");
+    }
+
+    // ── Add new player ────────────────────────────────────────────────────────
+    async function addNewPlayer() {
+      const name = document.getElementById("newPlayerName").value.trim();
+      if (!name) return;
+      const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
+      const msg = document.getElementById("addMsg");
+      try {
+        await setDoc(doc(db, "players", id), {
+          name, cards: 6, glory: 0, guild: "None", secretQuest: false
+        });
+        document.getElementById("newPlayerName").value = "";
+        msg.textContent = `✔ "${name}" added (Lvl 1, 6 cards).`;
+        msg.style.color = "#2a7a2a";
+        setTimeout(() => { msg.textContent = ""; }, 3000);
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#c0392b";
+      }
+    }
+
+    // ── Glory leaderboard ─────────────────────────────────────────────────────
+    function renderGloryLeaderboard() {
+      const tbody = document.getElementById("gloryBody");
+      const sorted = [...allPlayers].sort((a, b) => (b.glory ?? 0) - (a.glory ?? 0));
+      if (!sorted.length) {
+        tbody.innerHTML = `<tr><td colspan="4" class="empty">No players yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = sorted.map((p, i) => {
+        const lvl = calcLevel(p.cards ?? 6, p.secretQuest);
+        const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
+        return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
+          <td class="rank">${medal || (i + 1)}</td>
+          <td>${p.name}</td>
+          <td>${p.guild && p.guild !== "None" ? p.guild : "—"}</td>
+          <td class="num">${p.glory ?? 0}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    // ── Guild leaderboard ─────────────────────────────────────────────────────
+    function renderGuildLeaderboard() {
+      // Guild tabs
+      const tabBar = document.getElementById("guildTabBar");
+      if (!tabBar.children.length) {
+        GUILDS.forEach(g => {
+          const btn = document.createElement("button");
+          btn.className = "guild-tab-btn" + (g === activeGuildTab ? " active" : "");
+          btn.textContent = g;
+          btn.addEventListener("click", () => {
+            activeGuildTab = g;
+            document.querySelectorAll(".guild-tab-btn").forEach(b => b.classList.toggle("active", b.textContent === g));
+            renderGuildTable();
+          });
+          tabBar.appendChild(btn);
+        });
+        if (!activeGuildTab) activeGuildTab = GUILDS[0];
+      }
+      renderGuildTable();
+    }
+
+    function renderGuildTable() {
+      const tbody = document.getElementById("guildBody");
+      const guildHeader = document.getElementById("guildHeader");
+      guildHeader.textContent = activeGuildTab;
+
+      // Mark tab buttons active
+      document.querySelectorAll(".guild-tab-btn").forEach(b =>
+        b.classList.toggle("active", b.textContent === activeGuildTab)
+      );
+
+      const members = allPlayers
+        .filter(p => p.guild === activeGuildTab)
+        .sort((a, b) => (b.cards ?? 6) - (a.cards ?? 6));
+
+      if (!members.length) {
+        tbody.innerHTML = `<tr><td colspan="3" class="empty">No members in ${activeGuildTab} yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = members.map((p, i) => {
+        const cards = p.cards ?? 6;
+        const lvl = calcLevel(cards, p.secretQuest);
+        const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
+        return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
+          <td class="rank">${medal || (i + 1)}</td>
+          <td>${p.name}<br><small>Lvl ${lvl}</small></td>
+          <td class="num">${cards}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    // ── Tab switching ─────────────────────────────────────────────────────────
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll(".tab-btn").forEach(b =>
+        b.classList.toggle("active", b.dataset.tab === tab)
+      );
+      document.querySelectorAll(".tab-panel").forEach(p =>
+        p.classList.toggle("hidden", p.id !== "tab-" + tab)
+      );
+      if (tab === "glory")  renderGloryLeaderboard();
+      if (tab === "guild")  renderGuildLeaderboard();
+      if (tab === "search") renderResults(document.getElementById("searchInput").value);
+    }
+
+    // ── DOM ready ─────────────────────────────────────────────────────────────
+    document.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll(".tab-btn").forEach(btn =>
+        btn.addEventListener("click", () => switchTab(btn.dataset.tab))
+      );
+
+      document.getElementById("searchInput").addEventListener("input", e =>
+        renderResults(e.target.value)
+      );
+
+      document.getElementById("closeEditor").addEventListener("click", () => {
+        document.getElementById("playerEditor").classList.add("hidden");
+        selectedPlayer = null;
+      });
+
+      document.getElementById("saveBtn").addEventListener("click", savePlayer);
+      document.getElementById("secretQuestBtn").addEventListener("click", completeSecretQuest);
+
+      document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
+      document.getElementById("newPlayerName").addEventListener("keydown", e => {
+        if (e.key === "Enter") addNewPlayer();
+      });
+
+      document.getElementById("levelUpClose").addEventListener("click", () => {
+        document.getElementById("levelUpOverlay").classList.add("hidden");
+      });
+
+      renderResults("");
+    });
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      font-size: 16px;
+    }
+
+    header {
+      background: #2c3e50;
+      color: #fff;
+      padding: 16px 20px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      background: #e0e0e0;
+      border-bottom: 2px solid #ccc;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      flex: 1;
+      min-width: 100px;
+      padding: 13px 8px;
+      font-size: 14px;
+      font-weight: 600;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #555;
+      white-space: nowrap;
+    }
+    .tab-btn.active {
+      background: #fff;
+      color: #2c3e50;
+      border-bottom: 3px solid #2c3e50;
+    }
+
+    .tab-panel { padding: 16px; }
+    .hidden { display: none !important; }
+
+    /* ── Search ── */
+    #searchInput {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 17px;
+      border: 2px solid #ccc;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      outline: none;
+    }
+    #searchInput:focus { border-color: #2c3e50; }
+
+    #resultsList {
+      list-style: none;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .player-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+    }
+    .player-row:last-child { border-bottom: none; }
+    .player-row:hover, .player-row:active { background: #f0f4f8; }
+    .player-name { font-weight: 600; font-size: 16px; }
+    .player-meta { font-size: 13px; color: #666; text-align: right; }
+    .empty { padding: 20px; color: #999; text-align: center; font-size: 15px; display: block; }
+
+    /* ── Add player ── */
+    .add-section {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .add-section input {
+      flex: 1;
+      padding: 12px 14px;
+      font-size: 16px;
+      border: 2px solid #ccc;
+      border-radius: 8px;
+      outline: none;
+    }
+    .add-section input:focus { border-color: #2c3e50; }
+    .add-section button {
+      padding: 12px 18px;
+      background: #2c3e50;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #addMsg { margin-top: 8px; font-size: 14px; min-height: 20px; }
+
+    /* ── Player Editor Modal ── */
+    #playerEditor {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 20px;
+    }
+    .editor-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .editor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .editor-header h2 { font-size: 20px; color: #2c3e50; }
+    #closeEditor {
+      background: none;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      color: #888;
+    }
+
+    #levelDisplay {
+      background: #eef2f7;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 15px;
+      margin-bottom: 16px;
+      color: #2c3e50;
+    }
+    #levelDisplay strong { font-size: 18px; }
+    .next-lvl { color: #666; font-size: 13px; }
+
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 5px;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .field input, .field select {
+      width: 100%;
+      padding: 11px 13px;
+      font-size: 16px;
+      border: 2px solid #ccc;
+      border-radius: 8px;
+      outline: none;
+      background: #fff;
+    }
+    .field input:focus, .field select:focus { border-color: #2c3e50; }
+
+    #secretQuestBtn {
+      width: 100%;
+      padding: 13px;
+      background: #6c3483;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 14px;
+    }
+    #secretQuestBtn.sq-done {
+      background: #888;
+      cursor: default;
+    }
+
+    #saveBtn {
+      width: 100%;
+      padding: 14px;
+      background: #2c3e50;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #editorMsg { margin-top: 10px; font-size: 14px; min-height: 20px; text-align: center; }
+
+    /* ── Level up overlay ── */
+    #levelUpOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    .levelup-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 40px 32px;
+      text-align: center;
+      max-width: 340px;
+      width: 90%;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.3);
+    }
+    .levelup-card .lvl-icon { font-size: 56px; margin-bottom: 12px; }
+    .levelup-card h2 { font-size: 26px; color: #2c3e50; margin-bottom: 8px; }
+    #levelUpText { font-size: 18px; color: #444; margin-bottom: 24px; }
+    #levelUpClose {
+      padding: 13px 32px;
+      background: #2c3e50;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* ── Leaderboard tables ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    thead { background: #2c3e50; color: #fff; }
+    th { padding: 12px 14px; text-align: left; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 13px 14px; font-size: 15px; border-bottom: 1px solid #eee; }
+    td small { font-size: 12px; color: #888; }
+    tr:last-child td { border-bottom: none; }
+    .rank { font-weight: 700; color: #555; width: 48px; font-size: 18px; }
+    .num { font-weight: 700; color: #2c3e50; text-align: right; }
+    th:last-child { text-align: right; }
+    .rank-1 td { background: #fffbe6; }
+    .rank-2 td { background: #f7f7f7; }
+    .rank-3 td { background: #fff5ee; }
+
+    /* ── Guild tabs ── */
+    #guildTabBar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .guild-tab-btn {
+      padding: 8px 14px;
+      border: 2px solid #2c3e50;
+      border-radius: 20px;
+      background: #fff;
+      color: #2c3e50;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .guild-tab-btn.active {
+      background: #2c3e50;
+      color: #fff;
+    }
+    #guildHeader {
+      font-size: 18px;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+
+<header>🎪 Festival Game Manager</header>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="search">Players</button>
+  <button class="tab-btn" data-tab="glory">Glory Board</button>
+  <button class="tab-btn" data-tab="guild">Guild Board</button>
+</div>
+
+<!-- Search Tab -->
+<div class="tab-panel" id="tab-search">
+  <input type="text" id="searchInput" placeholder="Search player name…" autocomplete="off" autocorrect="off" spellcheck="false">
+  <ul id="resultsList"></ul>
+  <div class="add-section">
+    <input type="text" id="newPlayerName" placeholder="Add new player…">
+    <button id="addPlayerBtn">Add</button>
+  </div>
+  <div id="addMsg"></div>
+</div>
+
+<!-- Glory Leaderboard -->
+<div class="tab-panel hidden" id="tab-glory">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Player</th><th>Guild</th><th style="text-align:right">Glory</th></tr>
+    </thead>
+    <tbody id="gloryBody">
+      <tr><td colspan="4" class="empty">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Guild Leaderboard -->
+<div class="tab-panel hidden" id="tab-guild">
+  <div id="guildTabBar"></div>
+  <div id="guildHeader"></div>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Player</th><th style="text-align:right">Cards</th></tr>
+    </thead>
+    <tbody id="guildBody">
+      <tr><td colspan="3" class="empty">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Player Editor Modal -->
+<div id="playerEditor" class="hidden">
+  <div class="editor-card">
+    <div class="editor-header">
+      <h2 id="editorName">Player</h2>
+      <button id="closeEditor">✕</button>
+    </div>
+
+    <div id="levelDisplay">Level <strong>1</strong></div>
+
+    <div class="field">
+      <label>Unique Cards Collected</label>
+      <input type="number" id="editorCards" min="6" placeholder="6">
+    </div>
+    <div class="field">
+      <label>Glory</label>
+      <input type="number" id="editorGlory" min="0" placeholder="0">
+    </div>
+    <div class="field">
+      <label>Guild</label>
+      <select id="editorGuild">
+        <option value="None">None</option>
+        <option value="Paladins">Paladins</option>
+        <option value="Rogues">Rogues</option>
+        <option value="Druids">Druids</option>
+        <option value="Wizards">Wizards</option>
+        <option value="Inventors">Inventors</option>
+      </select>
+    </div>
+
+    <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
+    <button id="saveBtn">Save</button>
+    <div id="editorMsg"></div>
+  </div>
+</div>
+
+<!-- Level Up Notification -->
+<div id="levelUpOverlay" class="hidden">
+  <div class="levelup-card">
+    <div class="lvl-icon">⬆️</div>
+    <h2>Level Up!</h2>
+    <p id="levelUpText"></p>
+    <button id="levelUpClose">Got it</button>
+  </div>
+</div>
+
+</body>
+</html>
