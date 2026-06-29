@@ -79,12 +79,8 @@
       const results = fuzzySearch(q);
       if (!results.length) {
         list.innerHTML = `<li class="empty">No adventurers found.</li>`;
-        if (q.trim()) {
-          document.getElementById("newPlayerName").value = q.trim();
-        }
-        return;
       }
-      document.getElementById("newPlayerName").value = "";
+      document.getElementById("newPlayerName").value = q.trim();
       list.innerHTML = results.map(p => {
         const cards = p.cards ?? 6;
         const lvl = calcLevel(cards, p.secretQuest);
