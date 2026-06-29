@@ -311,9 +311,17 @@
       document.getElementById("deleteBtn").addEventListener("click", deletePlayer);
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
+
+      // FIX: Huzzah button now also closes the editor modal and returns to home
       document.getElementById("levelUpClose").addEventListener("click", () => {
         document.getElementById("levelUpOverlay").classList.add("hidden");
+        document.getElementById("playerEditor").classList.add("hidden");
+        selectedPlayer = null;
+        switchTab("search");
+        document.getElementById("searchInput").value = "";
+        renderResults("");
       });
+
       renderResults("");
     });
   </script>
@@ -417,6 +425,40 @@
     #searchInput::placeholder { color: #6655aa; }
     #searchInput:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
 
+    /* ── Add adventurer — now ABOVE results list ── */
+    .add-section {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .add-section input {
+      flex: 1;
+      padding: 18px 20px;
+      font-family: 'IM Fell English', serif;
+      font-size: 20px;
+      background: #0d0020;
+      color: #f0e6d3;
+      border: 2px solid #5533aa;
+      border-radius: 8px;
+      outline: none;
+    }
+    .add-section input::placeholder { color: #6655aa; }
+    .add-section input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
+    .add-section button {
+      padding: 18px 28px;
+      background: linear-gradient(135deg, #44aa44, #228822);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-family: 'Cinzel', serif;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 1px;
+      box-shadow: 0 2px 8px rgba(0,180,0,0.3);
+    }
+    #addMsg { margin-bottom: 10px; font-size: 15px; min-height: 22px; font-style: italic; }
+
     /* ── Results list ── */
     #resultsList {
       list-style: none;
@@ -445,40 +487,6 @@
     .player-meta { font-size: 13px; color: #9980bb; text-align: right; }
     .empty { padding: 20px; color: #6655aa; text-align: center; font-size: 15px; display: block; font-style: italic; }
 
-    /* ── Add adventurer ── */
-    .add-section {
-      display: flex;
-      gap: 12px;
-      margin-top: 20px;
-    }
-    .add-section input {
-      flex: 1;
-      padding: 18px 20px;
-      font-family: 'IM Fell English', serif;
-      font-size: 20px;
-      background: #0d0020;
-      color: #f0e6d3;
-      border: 2px solid #5533aa;
-      border-radius: 8px;
-      outline: none;
-    }
-    .add-section input::placeholder { color: #6655aa; }
-    .add-section input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
-    .add-section button {
-      padding: 18px 28px;
-      background: linear-gradient(135deg, #44aa44, #228822);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 1px;
-      box-shadow: 0 2px 8px rgba(0,180,0,0.3);
-    }
-    #addMsg { margin-top: 10px; font-size: 15px; min-height: 22px; font-style: italic; }
-
     /* ── Player Editor Modal ── */
     #playerEditor {
       position: fixed;
@@ -494,9 +502,9 @@
       background: linear-gradient(160deg, #110030, #1a0040);
       border: 2px solid #7744cc;
       border-radius: 12px;
-      padding: 24px;
+      padding: 28px;
       width: 100%;
-      max-width: 440px;
+      max-width: 480px;
       box-shadow: 0 0 40px rgba(120,60,255,0.4);
       max-height: 90vh;
       overflow-y: auto;
@@ -505,13 +513,13 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 16px;
+      margin-bottom: 20px;
       border-bottom: 1px solid #3a1a70;
-      padding-bottom: 14px;
+      padding-bottom: 16px;
     }
     .editor-header h2 {
       font-family: 'Cinzel', serif;
-      font-size: 20px;
+      font-size: 26px;
       background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -520,39 +528,40 @@
     #closeEditor {
       background: none;
       border: none;
-      font-size: 24px;
+      font-size: 30px;
       cursor: pointer;
       color: #9977cc;
+      line-height: 1;
     }
 
     #levelDisplay {
       background: #0d0028;
       border: 1px solid #5533aa;
       border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 15px;
-      margin-bottom: 16px;
+      padding: 14px 18px;
+      font-size: 20px;
+      margin-bottom: 20px;
       color: #cc99ff;
     }
-    #levelDisplay strong { font-size: 20px; color: #ffcc44; font-family: 'Cinzel', serif; }
-    .next-lvl { color: #8877aa; font-size: 13px; }
+    #levelDisplay strong { font-size: 28px; color: #ffcc44; font-family: 'Cinzel', serif; }
+    .next-lvl { color: #8877aa; font-size: 16px; }
 
-    .field { margin-bottom: 14px; }
+    .field { margin-bottom: 18px; }
     .field label {
       display: block;
       font-family: 'Cinzel', serif;
-      font-size: 11px;
+      font-size: 14px;
       font-weight: 600;
-      margin-bottom: 5px;
+      margin-bottom: 8px;
       color: #aa88dd;
       text-transform: uppercase;
       letter-spacing: 1.5px;
     }
     .field input, .field select {
       width: 100%;
-      padding: 11px 13px;
+      padding: 16px 16px;
       font-family: 'IM Fell English', serif;
-      font-size: 16px;
+      font-size: 22px;
       background: #0d0020;
       color: #f0e6d3;
       border: 2px solid #5533aa;
@@ -564,16 +573,16 @@
 
     #secretQuestBtn {
       width: 100%;
-      padding: 13px;
+      padding: 16px;
       background: linear-gradient(135deg, #6c3483, #9b59b6);
       color: #fff;
       border: none;
       border-radius: 8px;
       font-family: 'Cinzel', serif;
-      font-size: 14px;
+      font-size: 17px;
       font-weight: 600;
       cursor: pointer;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
       letter-spacing: 0.5px;
       box-shadow: 0 2px 12px rgba(150,50,200,0.4);
     }
@@ -581,36 +590,36 @@
 
     #saveBtn {
       width: 100%;
-      padding: 14px;
+      padding: 18px;
       background: linear-gradient(135deg, #1a5fa8, #2980b9);
       color: #fff;
       border: none;
       border-radius: 8px;
       font-family: 'Cinzel', serif;
-      font-size: 16px;
+      font-size: 20px;
       font-weight: 700;
       cursor: pointer;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
       letter-spacing: 1px;
       box-shadow: 0 2px 12px rgba(40,120,200,0.4);
     }
 
     #deleteBtn {
       width: 100%;
-      padding: 12px;
+      padding: 15px;
       background: transparent;
       color: #ff6655;
       border: 2px solid #aa3322;
       border-radius: 8px;
       font-family: 'Cinzel', serif;
-      font-size: 14px;
+      font-size: 17px;
       font-weight: 600;
       cursor: pointer;
       letter-spacing: 0.5px;
     }
     #deleteBtn:hover { background: rgba(180,50,40,0.15); }
 
-    #editorMsg { margin-top: 10px; font-size: 14px; min-height: 20px; text-align: center; font-style: italic; }
+    #editorMsg { margin-top: 12px; font-size: 17px; min-height: 24px; text-align: center; font-style: italic; }
 
     /* ── Level up overlay ── */
     #levelUpOverlay {
@@ -767,12 +776,15 @@
 <!-- Search Tab -->
 <div class="tab-panel" id="tab-search">
   <input type="text" id="searchInput" placeholder="Search adventurer name…" autocomplete="off" autocorrect="off" spellcheck="false">
-  <ul id="resultsList"></ul>
+
+  <!-- Enrol section moved above the results list -->
   <div class="add-section">
     <input type="text" id="newPlayerName" placeholder="Enrol new adventurer…">
     <button id="addPlayerBtn">Enrol</button>
   </div>
   <div id="addMsg"></div>
+
+  <ul id="resultsList"></ul>
 </div>
 
 <!-- Glory Leaderboard -->
