@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Festival Game Manager</title>
+  <title>Adventurer Log</title>
+  <link href="https://fonts.googleapis.com/css2?family=MedievalSharp&family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import {
-      getFirestore, collection, doc, getDoc, getDocs,
-      setDoc, updateDoc, onSnapshot, query, orderBy
+      getFirestore, collection, doc, getDoc,
+      setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy
     } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -22,9 +23,6 @@
     };
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
-
-    // Level thresholds: index = level, value = cards needed to REACH that level
-    // Lvl1 = 6 cards (starting), Lvl2 = 12, Lvl3 = 20, Lvl4 = 30, Lvl5 = secret quest
     const LEVEL_THRESHOLDS = [0, 6, 12, 20, 30];
 
     function calcLevel(cards, secretQuest) {
@@ -36,7 +34,7 @@
     }
 
     function cardsForNextLevel(level) {
-      if (level >= 4) return null; // next is secret quest
+      if (level >= 4) return null;
       return LEVEL_THRESHOLDS[level + 1];
     }
 
@@ -49,15 +47,13 @@
     let activeTab = "search";
     let activeGuildTab = null;
 
-    // ── Live listener ─────────────────────────────────────────────────────────
     onSnapshot(query(playersCol, orderBy("name")), (snap) => {
       allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (activeTab === "glory")       renderGloryLeaderboard();
-      if (activeTab === "guild")       renderGuildLeaderboard();
-      if (activeTab === "search")      renderResults(document.getElementById("searchInput").value);
+      if (activeTab === "glory")  renderGloryLeaderboard();
+      if (activeTab === "guild")  renderGuildLeaderboard();
+      if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
     });
 
-    // ── Fuzzy search ──────────────────────────────────────────────────────────
     function score(name, q) {
       name = name.toLowerCase(); q = q.toLowerCase();
       if (name === q) return 1000;
@@ -77,12 +73,11 @@
         .slice(0, 15);
     }
 
-    // ── Render search results ─────────────────────────────────────────────────
     function renderResults(q) {
       const list = document.getElementById("resultsList");
       const results = fuzzySearch(q);
       if (!results.length) {
-        list.innerHTML = `<li class="empty">No players found.</li>`;
+        list.innerHTML = `<li class="empty">No adventurers found.</li>`;
         return;
       }
       list.innerHTML = results.map(p => {
@@ -99,7 +94,6 @@
       });
     }
 
-    // ── Open player editor ────────────────────────────────────────────────────
     async function openPlayer(id) {
       const snap = await getDoc(doc(db, "players", id));
       selectedPlayer = { id: snap.id, ...snap.data() };
@@ -109,18 +103,12 @@
     function showEditor() {
       const p = selectedPlayer;
       const cards = p.cards ?? 6;
-      const lvl = calcLevel(cards, p.secretQuest);
-
       document.getElementById("editorName").textContent = p.name;
       document.getElementById("editorCards").value = cards;
       document.getElementById("editorGlory").value = p.glory ?? 0;
       document.getElementById("editorGuild").value = p.guild || "None";
       document.getElementById("editorMsg").textContent = "";
-
-      // Level display
       updateLevelDisplay(cards, p.secretQuest);
-
-      // Secret quest button
       const sqBtn = document.getElementById("secretQuestBtn");
       if (p.secretQuest) {
         sqBtn.textContent = "✔ Secret Quest Complete";
@@ -131,7 +119,6 @@
         sqBtn.classList.remove("sq-done");
         sqBtn.disabled = false;
       }
-
       document.getElementById("playerEditor").classList.remove("hidden");
       document.getElementById("editorCards").focus();
     }
@@ -149,32 +136,17 @@
       lvlEl.innerHTML = `Level <strong>${lvl}</strong>${nextTxt}`;
     }
 
-    // Live preview as cards input changes
-    document.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("editorCards").addEventListener("input", () => {
-        if (!selectedPlayer) return;
-        const cards = parseInt(document.getElementById("editorCards").value) || 0;
-        updateLevelDisplay(cards, selectedPlayer.secretQuest);
-      });
-    });
-
-    // ── Save player ───────────────────────────────────────────────────────────
     async function savePlayer() {
       const cards = parseInt(document.getElementById("editorCards").value) || 6;
       const glory = parseInt(document.getElementById("editorGlory").value) || 0;
       const guild = document.getElementById("editorGuild").value;
       const msg = document.getElementById("editorMsg");
-
       const oldCards = selectedPlayer.cards ?? 6;
       const oldLvl = calcLevel(oldCards, selectedPlayer.secretQuest);
       const newLvl = calcLevel(cards, selectedPlayer.secretQuest);
-
       try {
         await updateDoc(doc(db, "players", selectedPlayer.id), { cards, glory, guild });
-        selectedPlayer.cards = cards;
-        selectedPlayer.glory = glory;
-        selectedPlayer.guild = guild;
-
+        selectedPlayer.cards = cards; selectedPlayer.glory = glory; selectedPlayer.guild = guild;
         if (newLvl > oldLvl) {
           showLevelUp(selectedPlayer.name, newLvl);
         } else {
@@ -188,12 +160,11 @@
       }
     }
 
-    // ── Secret quest ──────────────────────────────────────────────────────────
     async function completeSecretQuest() {
       const cards = parseInt(document.getElementById("editorCards").value) || selectedPlayer.cards || 6;
       if (cards < 30) {
         const msg = document.getElementById("editorMsg");
-        msg.textContent = "Player needs 30 cards before completing the secret quest.";
+        msg.textContent = "Adventurer needs 30 cards before completing the secret quest.";
         msg.style.color = "#c0392b";
         return;
       }
@@ -211,26 +182,35 @@
       }
     }
 
-    // ── Level up notification ─────────────────────────────────────────────────
-    function showLevelUp(name, level) {
-      const overlay = document.getElementById("levelUpOverlay");
-      document.getElementById("levelUpText").textContent = `${name} reached Level ${level}!`;
-      overlay.classList.remove("hidden");
+    async function deletePlayer() {
+      if (!selectedPlayer) return;
+      const confirmed = confirm(`Delete "${selectedPlayer.name}"? This cannot be undone.`);
+      if (!confirmed) return;
+      try {
+        await deleteDoc(doc(db, "players", selectedPlayer.id));
+        document.getElementById("playerEditor").classList.add("hidden");
+        selectedPlayer = null;
+      } catch (e) {
+        document.getElementById("editorMsg").textContent = "Error deleting: " + e.message;
+        document.getElementById("editorMsg").style.color = "#c0392b";
+      }
     }
 
-    // ── Add new player ────────────────────────────────────────────────────────
+    function showLevelUp(name, level) {
+      document.getElementById("levelUpText").textContent = `${name} reached Level ${level}!`;
+      document.getElementById("levelUpOverlay").classList.remove("hidden");
+    }
+
     async function addNewPlayer() {
       const name = document.getElementById("newPlayerName").value.trim();
       if (!name) return;
       const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
       const msg = document.getElementById("addMsg");
       try {
-        await setDoc(doc(db, "players", id), {
-          name, cards: 6, glory: 0, guild: "None", secretQuest: false
-        });
+        await setDoc(doc(db, "players", id), { name, cards: 6, glory: 0, guild: "None", secretQuest: false });
         document.getElementById("newPlayerName").value = "";
         msg.textContent = `✔ "${name}" added (Lvl 1, 6 cards).`;
-        msg.style.color = "#2a7a2a";
+        msg.style.color = "#2a6e2a";
         setTimeout(() => { msg.textContent = ""; }, 3000);
       } catch (e) {
         msg.textContent = "Error: " + e.message;
@@ -238,16 +218,14 @@
       }
     }
 
-    // ── Glory leaderboard ─────────────────────────────────────────────────────
     function renderGloryLeaderboard() {
       const tbody = document.getElementById("gloryBody");
       const sorted = [...allPlayers].sort((a, b) => (b.glory ?? 0) - (a.glory ?? 0));
       if (!sorted.length) {
-        tbody.innerHTML = `<tr><td colspan="4" class="empty">No players yet.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4" class="empty">No adventurers yet.</td></tr>`;
         return;
       }
       tbody.innerHTML = sorted.map((p, i) => {
-        const lvl = calcLevel(p.cards ?? 6, p.secretQuest);
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
@@ -258,9 +236,7 @@
       }).join("");
     }
 
-    // ── Guild leaderboard ─────────────────────────────────────────────────────
     function renderGuildLeaderboard() {
-      // Guild tabs
       const tabBar = document.getElementById("guildTabBar");
       if (!tabBar.children.length) {
         GUILDS.forEach(g => {
@@ -281,18 +257,13 @@
 
     function renderGuildTable() {
       const tbody = document.getElementById("guildBody");
-      const guildHeader = document.getElementById("guildHeader");
-      guildHeader.textContent = activeGuildTab;
-
-      // Mark tab buttons active
+      document.getElementById("guildHeader").textContent = activeGuildTab;
       document.querySelectorAll(".guild-tab-btn").forEach(b =>
         b.classList.toggle("active", b.textContent === activeGuildTab)
       );
-
       const members = allPlayers
         .filter(p => p.guild === activeGuildTab)
         .sort((a, b) => (b.cards ?? 6) - (a.cards ?? 6));
-
       if (!members.length) {
         tbody.innerHTML = `<tr><td colspan="3" class="empty">No members in ${activeGuildTab} yet.</td></tr>`;
         return;
@@ -309,7 +280,6 @@
       }).join("");
     }
 
-    // ── Tab switching ─────────────────────────────────────────────────────────
     function switchTab(tab) {
       activeTab = tab;
       document.querySelectorAll(".tab-btn").forEach(b =>
@@ -323,33 +293,27 @@
       if (tab === "search") renderResults(document.getElementById("searchInput").value);
     }
 
-    // ── DOM ready ─────────────────────────────────────────────────────────────
     document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll(".tab-btn").forEach(btn =>
         btn.addEventListener("click", () => switchTab(btn.dataset.tab))
       );
-
-      document.getElementById("searchInput").addEventListener("input", e =>
-        renderResults(e.target.value)
-      );
-
+      document.getElementById("searchInput").addEventListener("input", e => renderResults(e.target.value));
+      document.getElementById("editorCards").addEventListener("input", () => {
+        if (!selectedPlayer) return;
+        updateLevelDisplay(parseInt(document.getElementById("editorCards").value) || 0, selectedPlayer.secretQuest);
+      });
       document.getElementById("closeEditor").addEventListener("click", () => {
         document.getElementById("playerEditor").classList.add("hidden");
         selectedPlayer = null;
       });
-
       document.getElementById("saveBtn").addEventListener("click", savePlayer);
       document.getElementById("secretQuestBtn").addEventListener("click", completeSecretQuest);
-
+      document.getElementById("deleteBtn").addEventListener("click", deletePlayer);
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
-      document.getElementById("newPlayerName").addEventListener("keydown", e => {
-        if (e.key === "Enter") addNewPlayer();
-      });
-
+      document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
       document.getElementById("levelUpClose").addEventListener("click", () => {
         document.getElementById("levelUpOverlay").classList.add("hidden");
       });
-
       renderResults("");
     });
   </script>
@@ -358,113 +322,168 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f5f5f5;
-      color: #1a1a1a;
+      font-family: 'IM Fell English', Georgia, serif;
+      background: #1a0a2e;
+      color: #f0e6d3;
       font-size: 16px;
+      min-height: 100vh;
     }
 
+    /* ── Rainbow gradient utility ── */
+    .rainbow-text {
+      background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* ── Header ── */
     header {
-      background: #2c3e50;
-      color: #fff;
-      padding: 16px 20px;
-      font-size: 20px;
+      background: linear-gradient(135deg, #0d0020 0%, #1a0050 50%, #0d0020 100%);
+      border-bottom: 3px solid transparent;
+      border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1;
+      padding: 24px 20px 20px;
+      text-align: center;
+    }
+    header h1 {
+      font-family: 'Cinzel Decorative', serif;
+      font-size: 32px;
       font-weight: 700;
+      background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-shadow: none;
+      letter-spacing: 2px;
+    }
+    header p {
+      font-family: 'IM Fell English', serif;
+      font-style: italic;
+      color: #c8a87a;
+      font-size: 13px;
+      margin-top: 4px;
+      letter-spacing: 1px;
     }
 
     /* ── Tabs ── */
     .tabs {
       display: flex;
-      background: #e0e0e0;
-      border-bottom: 2px solid #ccc;
+      background: #0d0020;
+      border-bottom: 3px solid transparent;
+      border-image: linear-gradient(90deg, #ff4444, #ffee00, #44cc44, #4488ff, #9944ff) 1;
       overflow-x: auto;
     }
     .tab-btn {
       flex: 1;
       min-width: 100px;
-      padding: 13px 8px;
-      font-size: 14px;
+      padding: 15px 8px;
+      font-family: 'Cinzel', serif;
+      font-size: 13px;
       font-weight: 600;
+      letter-spacing: 1px;
       background: none;
       border: none;
       cursor: pointer;
-      color: #555;
+      color: #9980bb;
       white-space: nowrap;
+      transition: color 0.2s, background 0.2s;
     }
     .tab-btn.active {
-      background: #fff;
-      color: #2c3e50;
-      border-bottom: 3px solid #2c3e50;
+      background: #1a0a2e;
+      background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      border-bottom: 3px solid #ffaa00;
     }
 
-    .tab-panel { padding: 16px; }
+    .tab-panel { padding: 20px; }
     .hidden { display: none !important; }
 
     /* ── Search ── */
     #searchInput {
       width: 100%;
-      padding: 12px 14px;
-      font-size: 17px;
-      border: 2px solid #ccc;
+      padding: 18px 20px;
+      font-family: 'IM Fell English', serif;
+      font-size: 20px;
+      background: #0d0020;
+      color: #f0e6d3;
+      border: 2px solid #5533aa;
       border-radius: 8px;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
       outline: none;
+      transition: border-color 0.2s;
     }
-    #searchInput:focus { border-color: #2c3e50; }
+    #searchInput::placeholder { color: #6655aa; }
+    #searchInput:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
 
+    /* ── Results list ── */
     #resultsList {
       list-style: none;
-      border: 1px solid #ddd;
+      border: 1px solid #3a2060;
       border-radius: 8px;
       overflow: hidden;
-      background: #fff;
+      background: #0d0020;
     }
     .player-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 14px 16px;
-      border-bottom: 1px solid #eee;
+      padding: 16px 18px;
+      border-bottom: 1px solid #2a1050;
       cursor: pointer;
+      transition: background 0.15s;
     }
     .player-row:last-child { border-bottom: none; }
-    .player-row:hover, .player-row:active { background: #f0f4f8; }
-    .player-name { font-weight: 600; font-size: 16px; }
-    .player-meta { font-size: 13px; color: #666; text-align: right; }
-    .empty { padding: 20px; color: #999; text-align: center; font-size: 15px; display: block; }
+    .player-row:hover { background: #1f0840; }
+    .player-name {
+      font-family: 'Cinzel', serif;
+      font-weight: 600;
+      font-size: 16px;
+      color: #e8d5ff;
+    }
+    .player-meta { font-size: 13px; color: #9980bb; text-align: right; }
+    .empty { padding: 20px; color: #6655aa; text-align: center; font-size: 15px; display: block; font-style: italic; }
 
-    /* ── Add player ── */
+    /* ── Add adventurer ── */
     .add-section {
       display: flex;
-      gap: 10px;
-      margin-top: 16px;
+      gap: 12px;
+      margin-top: 20px;
     }
     .add-section input {
       flex: 1;
-      padding: 12px 14px;
-      font-size: 16px;
-      border: 2px solid #ccc;
+      padding: 18px 20px;
+      font-family: 'IM Fell English', serif;
+      font-size: 20px;
+      background: #0d0020;
+      color: #f0e6d3;
+      border: 2px solid #5533aa;
       border-radius: 8px;
       outline: none;
     }
-    .add-section input:focus { border-color: #2c3e50; }
+    .add-section input::placeholder { color: #6655aa; }
+    .add-section input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
     .add-section button {
-      padding: 12px 18px;
-      background: #2c3e50;
+      padding: 18px 28px;
+      background: linear-gradient(135deg, #44aa44, #228822);
       color: #fff;
       border: none;
       border-radius: 8px;
-      font-size: 15px;
-      font-weight: 600;
+      font-family: 'Cinzel', serif;
+      font-size: 16px;
+      font-weight: 700;
       cursor: pointer;
+      letter-spacing: 1px;
+      box-shadow: 0 2px 8px rgba(0,180,0,0.3);
     }
-    #addMsg { margin-top: 8px; font-size: 14px; min-height: 20px; }
+    #addMsg { margin-top: 10px; font-size: 15px; min-height: 22px; font-style: italic; }
 
     /* ── Player Editor Modal ── */
     #playerEditor {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.5);
+      background: rgba(0,0,0,0.75);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -472,12 +491,13 @@
       padding: 20px;
     }
     .editor-card {
-      background: #fff;
+      background: linear-gradient(160deg, #110030, #1a0040);
+      border: 2px solid #7744cc;
       border-radius: 12px;
       padding: 24px;
       width: 100%;
       max-width: 440px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+      box-shadow: 0 0 40px rgba(120,60,255,0.4);
       max-height: 90vh;
       overflow-y: auto;
     }
@@ -486,131 +506,208 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 16px;
+      border-bottom: 1px solid #3a1a70;
+      padding-bottom: 14px;
     }
-    .editor-header h2 { font-size: 20px; color: #2c3e50; }
+    .editor-header h2 {
+      font-family: 'Cinzel', serif;
+      font-size: 20px;
+      background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
     #closeEditor {
       background: none;
       border: none;
       font-size: 24px;
       cursor: pointer;
-      color: #888;
+      color: #9977cc;
     }
 
     #levelDisplay {
-      background: #eef2f7;
+      background: #0d0028;
+      border: 1px solid #5533aa;
       border-radius: 8px;
       padding: 10px 14px;
       font-size: 15px;
       margin-bottom: 16px;
-      color: #2c3e50;
+      color: #cc99ff;
     }
-    #levelDisplay strong { font-size: 18px; }
-    .next-lvl { color: #666; font-size: 13px; }
+    #levelDisplay strong { font-size: 20px; color: #ffcc44; font-family: 'Cinzel', serif; }
+    .next-lvl { color: #8877aa; font-size: 13px; }
 
     .field { margin-bottom: 14px; }
     .field label {
       display: block;
+      font-family: 'Cinzel', serif;
+      font-size: 11px;
       font-weight: 600;
-      font-size: 13px;
       margin-bottom: 5px;
-      color: #444;
+      color: #aa88dd;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 1.5px;
     }
     .field input, .field select {
       width: 100%;
       padding: 11px 13px;
+      font-family: 'IM Fell English', serif;
       font-size: 16px;
-      border: 2px solid #ccc;
+      background: #0d0020;
+      color: #f0e6d3;
+      border: 2px solid #5533aa;
       border-radius: 8px;
       outline: none;
-      background: #fff;
     }
-    .field input:focus, .field select:focus { border-color: #2c3e50; }
+    .field select option { background: #1a0040; color: #f0e6d3; }
+    .field input:focus, .field select:focus { border-color: #aa66ff; }
 
     #secretQuestBtn {
       width: 100%;
       padding: 13px;
-      background: #6c3483;
+      background: linear-gradient(135deg, #6c3483, #9b59b6);
       color: #fff;
       border: none;
       border-radius: 8px;
-      font-size: 15px;
+      font-family: 'Cinzel', serif;
+      font-size: 14px;
       font-weight: 600;
       cursor: pointer;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
+      letter-spacing: 0.5px;
+      box-shadow: 0 2px 12px rgba(150,50,200,0.4);
     }
-    #secretQuestBtn.sq-done {
-      background: #888;
-      cursor: default;
-    }
+    #secretQuestBtn.sq-done { background: #3a3a3a; box-shadow: none; cursor: default; }
 
     #saveBtn {
       width: 100%;
       padding: 14px;
-      background: #2c3e50;
+      background: linear-gradient(135deg, #1a5fa8, #2980b9);
       color: #fff;
       border: none;
       border-radius: 8px;
-      font-size: 17px;
+      font-family: 'Cinzel', serif;
+      font-size: 16px;
       font-weight: 700;
       cursor: pointer;
+      margin-bottom: 10px;
+      letter-spacing: 1px;
+      box-shadow: 0 2px 12px rgba(40,120,200,0.4);
     }
-    #editorMsg { margin-top: 10px; font-size: 14px; min-height: 20px; text-align: center; }
+
+    #deleteBtn {
+      width: 100%;
+      padding: 12px;
+      background: transparent;
+      color: #ff6655;
+      border: 2px solid #aa3322;
+      border-radius: 8px;
+      font-family: 'Cinzel', serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+    }
+    #deleteBtn:hover { background: rgba(180,50,40,0.15); }
+
+    #editorMsg { margin-top: 10px; font-size: 14px; min-height: 20px; text-align: center; font-style: italic; }
 
     /* ── Level up overlay ── */
     #levelUpOverlay {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.65);
+      background: rgba(0,0,0,0.8);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 200;
     }
     .levelup-card {
-      background: #fff;
+      background: linear-gradient(160deg, #0d0030, #1a0050);
+      border: 3px solid transparent;
       border-radius: 16px;
       padding: 40px 32px;
       text-align: center;
       max-width: 340px;
       width: 90%;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.3);
+      box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5);
+      position: relative;
     }
-    .levelup-card .lvl-icon { font-size: 56px; margin-bottom: 12px; }
-    .levelup-card h2 { font-size: 26px; color: #2c3e50; margin-bottom: 8px; }
-    #levelUpText { font-size: 18px; color: #444; margin-bottom: 24px; }
+    .levelup-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 14px;
+      padding: 3px;
+      background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+    }
+    .levelup-card .lvl-icon { font-size: 64px; margin-bottom: 12px; }
+    .levelup-card h2 {
+      font-family: 'Cinzel Decorative', serif;
+      font-size: 28px;
+      background: linear-gradient(90deg, #ffcc00, #ff9900, #ffee44);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 12px;
+    }
+    #levelUpText {
+      font-family: 'IM Fell English', serif;
+      font-size: 18px;
+      color: #e8d5ff;
+      margin-bottom: 28px;
+      font-style: italic;
+    }
     #levelUpClose {
-      padding: 13px 32px;
-      background: #2c3e50;
-      color: #fff;
+      padding: 13px 36px;
+      background: linear-gradient(135deg, #cc9900, #ffcc00);
+      color: #1a0a00;
       border: none;
       border-radius: 8px;
+      font-family: 'Cinzel', serif;
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
+      letter-spacing: 1px;
     }
 
     /* ── Leaderboard tables ── */
     table {
       width: 100%;
       border-collapse: collapse;
-      background: #fff;
+      background: #0d0020;
       border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      border: 1px solid #3a1a70;
     }
-    thead { background: #2c3e50; color: #fff; }
-    th { padding: 12px 14px; text-align: left; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-    td { padding: 13px 14px; font-size: 15px; border-bottom: 1px solid #eee; }
-    td small { font-size: 12px; color: #888; }
+    thead {
+      background: linear-gradient(90deg, #1a0050, #2d0060);
+      border-bottom: 2px solid transparent;
+      border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1;
+    }
+    th {
+      padding: 14px;
+      text-align: left;
+      font-family: 'Cinzel', serif;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #cc99ff;
+    }
+    td { padding: 13px 14px; font-size: 15px; border-bottom: 1px solid #1e0840; color: #e8d5ff; }
+    td small { font-size: 12px; color: #7755aa; }
     tr:last-child td { border-bottom: none; }
-    .rank { font-weight: 700; color: #555; width: 48px; font-size: 18px; }
-    .num { font-weight: 700; color: #2c3e50; text-align: right; }
+    .rank { font-family: 'Cinzel', serif; font-weight: 700; color: #aa88cc; width: 48px; font-size: 16px; }
+    .num { font-family: 'Cinzel', serif; font-weight: 700; color: #ffcc44; text-align: right; }
     th:last-child { text-align: right; }
-    .rank-1 td { background: #fffbe6; }
-    .rank-2 td { background: #f7f7f7; }
-    .rank-3 td { background: #fff5ee; }
+    .rank-1 td { background: rgba(255, 200, 0, 0.08); }
+    .rank-2 td { background: rgba(180, 180, 200, 0.05); }
+    .rank-3 td { background: rgba(200, 120, 60, 0.07); }
 
     /* ── Guild tabs ── */
     #guildTabBar {
@@ -620,30 +717,46 @@
       margin-bottom: 16px;
     }
     .guild-tab-btn {
-      padding: 8px 14px;
-      border: 2px solid #2c3e50;
+      padding: 8px 16px;
+      border: 2px solid #5533aa;
       border-radius: 20px;
-      background: #fff;
-      color: #2c3e50;
-      font-size: 14px;
+      background: transparent;
+      color: #aa88dd;
+      font-family: 'Cinzel', serif;
+      font-size: 13px;
       font-weight: 600;
       cursor: pointer;
+      letter-spacing: 0.5px;
+      transition: all 0.2s;
     }
     .guild-tab-btn.active {
-      background: #2c3e50;
+      background: linear-gradient(135deg, #5533aa, #7744cc);
       color: #fff;
+      border-color: #9966ff;
+      box-shadow: 0 2px 10px rgba(100,60,200,0.4);
     }
     #guildHeader {
-      font-size: 18px;
-      font-weight: 700;
-      color: #2c3e50;
-      margin-bottom: 12px;
+      font-family: 'Cinzel Decorative', serif;
+      font-size: 20px;
+      margin-bottom: 14px;
+      background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa, #66aaff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0d0020; }
+    ::-webkit-scrollbar-thumb { background: #5533aa; border-radius: 3px; }
   </style>
 </head>
 <body>
 
-<header>🎪 Festival Game Manager</header>
+<header>
+  <h1>Adventurer Log</h1>
+  <p>Champions of Woodfordia</p>
+</header>
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="search">Players</button>
@@ -653,11 +766,11 @@
 
 <!-- Search Tab -->
 <div class="tab-panel" id="tab-search">
-  <input type="text" id="searchInput" placeholder="Search player name…" autocomplete="off" autocorrect="off" spellcheck="false">
+  <input type="text" id="searchInput" placeholder="Search adventurer name…" autocomplete="off" autocorrect="off" spellcheck="false">
   <ul id="resultsList"></ul>
   <div class="add-section">
-    <input type="text" id="newPlayerName" placeholder="Add new player…">
-    <button id="addPlayerBtn">Add</button>
+    <input type="text" id="newPlayerName" placeholder="Enrol new adventurer…">
+    <button id="addPlayerBtn">Enrol</button>
   </div>
   <div id="addMsg"></div>
 </div>
@@ -666,7 +779,7 @@
 <div class="tab-panel hidden" id="tab-glory">
   <table>
     <thead>
-      <tr><th>#</th><th>Player</th><th>Guild</th><th style="text-align:right">Glory</th></tr>
+      <tr><th>#</th><th>Adventurer</th><th>Guild</th><th style="text-align:right">Glory</th></tr>
     </thead>
     <tbody id="gloryBody">
       <tr><td colspan="4" class="empty">Loading…</td></tr>
@@ -680,7 +793,7 @@
   <div id="guildHeader"></div>
   <table>
     <thead>
-      <tr><th>#</th><th>Player</th><th style="text-align:right">Cards</th></tr>
+      <tr><th>#</th><th>Adventurer</th><th style="text-align:right">Cards</th></tr>
     </thead>
     <tbody id="guildBody">
       <tr><td colspan="3" class="empty">Loading…</td></tr>
@@ -692,12 +805,10 @@
 <div id="playerEditor" class="hidden">
   <div class="editor-card">
     <div class="editor-header">
-      <h2 id="editorName">Player</h2>
+      <h2 id="editorName">Adventurer</h2>
       <button id="closeEditor">✕</button>
     </div>
-
     <div id="levelDisplay">Level <strong>1</strong></div>
-
     <div class="field">
       <label>Unique Cards Collected</label>
       <input type="number" id="editorCards" min="6" placeholder="6">
@@ -717,9 +828,9 @@
         <option value="Inventors">Inventors</option>
       </select>
     </div>
-
     <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
     <button id="saveBtn">Save</button>
+    <button id="deleteBtn">🗑 Delete Adventurer</button>
     <div id="editorMsg"></div>
   </div>
 </div>
@@ -727,10 +838,10 @@
 <!-- Level Up Notification -->
 <div id="levelUpOverlay" class="hidden">
   <div class="levelup-card">
-    <div class="lvl-icon">⬆️</div>
+    <div class="lvl-icon">⚔️</div>
     <h2>Level Up!</h2>
     <p id="levelUpText"></p>
-    <button id="levelUpClose">Got it</button>
+    <button id="levelUpClose">Huzzah!</button>
   </div>
 </div>
 
