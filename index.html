@@ -295,6 +295,24 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
+      // Login gate — always shown on page load, no session persistence
+      function attemptLogin() {
+        const val = document.getElementById("loginInput").value.trim().toLowerCase();
+        if (VALID_USERS.includes(val)) {
+          document.getElementById("loginScreen").classList.add("hidden");
+          document.getElementById("mainApp").classList.remove("hidden");
+          renderResults("");
+        } else {
+          const err = document.getElementById("loginError");
+          err.textContent = "Incorrect password. Try again.";
+          document.getElementById("loginInput").value = "";
+          setTimeout(() => { err.textContent = ""; }, 2500);
+        }
+      }
+      document.getElementById("loginBtn").addEventListener("click", attemptLogin);
+      document.getElementById("loginInput").addEventListener("keydown", e => { if (e.key === "Enter") attemptLogin(); });
+
+      // Main app listeners (only active after login)
       document.querySelectorAll(".tab-btn").forEach(btn =>
         btn.addEventListener("click", () => switchTab(btn.dataset.tab))
       );
@@ -313,65 +331,15 @@
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
 
-      // FIX: Huzzah button now also closes the editor modal and returns to home
+      // Huzzah button closes level-up overlay and editor, returns to home
       document.getElementById("levelUpClose").addEventListener("click", () => {
         document.getElementById("levelUpOverlay").classList.add("hidden");
         document.getElementById("playerEditor").classList.add("hidden");
         selectedPlayer = null;
         switchTab("search");
         document.getElementById("searchInput").value = "";
-        // Login gate
-      function attemptLogin() {
-        const val = document.getElementById("loginInput").value.trim().toLowerCase();
-        if (VALID_USERS.includes(val)) {
-          sessionStorage.setItem("alAuth", val);
-          document.getElementById("loginScreen").classList.add("hidden");
-          document.getElementById("mainApp").classList.remove("hidden");
-          renderResults("");
-        } else {
-          const err = document.getElementById("loginError");
-          err.textContent = "Unknown adventurer. Try again.";
-          document.getElementById("loginInput").value = "";
-          setTimeout(() => { err.textContent = ""; }, 2500);
-        }
-      }
-
-      document.getElementById("loginBtn").addEventListener("click", attemptLogin);
-      document.getElementById("loginInput").addEventListener("keydown", e => { if (e.key === "Enter") attemptLogin(); });
-
-      // Check existing session
-      if (sessionStorage.getItem("alAuth")) {
-        document.getElementById("loginScreen").classList.add("hidden");
-        document.getElementById("mainApp").classList.remove("hidden");
         renderResults("");
-      }
       });
-
-      // Login gate
-      function attemptLogin() {
-        const val = document.getElementById("loginInput").value.trim().toLowerCase();
-        if (VALID_USERS.includes(val)) {
-          sessionStorage.setItem("alAuth", val);
-          document.getElementById("loginScreen").classList.add("hidden");
-          document.getElementById("mainApp").classList.remove("hidden");
-          renderResults("");
-        } else {
-          const err = document.getElementById("loginError");
-          err.textContent = "Unknown adventurer. Try again.";
-          document.getElementById("loginInput").value = "";
-          setTimeout(() => { err.textContent = ""; }, 2500);
-        }
-      }
-
-      document.getElementById("loginBtn").addEventListener("click", attemptLogin);
-      document.getElementById("loginInput").addEventListener("keydown", e => { if (e.key === "Enter") attemptLogin(); });
-
-      // Check existing session
-      if (sessionStorage.getItem("alAuth")) {
-        document.getElementById("loginScreen").classList.add("hidden");
-        document.getElementById("mainApp").classList.remove("hidden");
-        renderResults("");
-      }
     });
   </script>
 
@@ -1024,4 +992,3 @@
 
 </body>
 </html>
-
