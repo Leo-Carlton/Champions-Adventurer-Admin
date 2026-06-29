@@ -226,12 +226,18 @@
         tbody.innerHTML = `<tr><td colspan="4" class="empty">No adventurers yet.</td></tr>`;
         return;
       }
+      const guildColors = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
       tbody.innerHTML = sorted.map((p, i) => {
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
+        const guildName = p.guild && p.guild !== "None" ? p.guild : "—";
+        const guildColor = guildColors[p.guild] || "#9980bb";
+        const guildHtml = p.guild && p.guild !== "None"
+          ? `<span style="color:${guildColor};font-weight:600">${guildName}</span>`
+          : `<span style="color:#555">—</span>`;
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
-          <td>${p.name}</td>
-          <td>${p.guild && p.guild !== "None" ? p.guild : "—"}</td>
+          <td style="font-size:18px;font-family:'Cinzel',serif;font-weight:600">${p.name}</td>
+          <td>${guildHtml}</td>
           <td class="num">${p.glory ?? 0}</td>
         </tr>`;
       }).join("");
@@ -271,11 +277,10 @@
       }
       tbody.innerHTML = members.map((p, i) => {
         const cards = p.cards ?? 6;
-        const lvl = calcLevel(cards, p.secretQuest);
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
-          <td>${p.name}<br><small>Lvl ${lvl}</small></td>
+          <td>${p.name}</td>
           <td class="num">${cards}</td>
         </tr>`;
       }).join("");
