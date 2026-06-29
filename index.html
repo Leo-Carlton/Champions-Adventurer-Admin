@@ -24,6 +24,7 @@
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
     const LEVEL_THRESHOLDS = [0, 6, 12, 20, 30];
+    const VALID_USERS = ["lando", "red", "rogue", "prism", "neoninja", "glenderella"];
 
     function calcLevel(cards, secretQuest) {
       if (secretQuest && cards >= 30) return 5;
@@ -319,10 +320,58 @@
         selectedPlayer = null;
         switchTab("search");
         document.getElementById("searchInput").value = "";
+        // Login gate
+      function attemptLogin() {
+        const val = document.getElementById("loginInput").value.trim().toLowerCase();
+        if (VALID_USERS.includes(val)) {
+          sessionStorage.setItem("alAuth", val);
+          document.getElementById("loginScreen").classList.add("hidden");
+          document.getElementById("mainApp").classList.remove("hidden");
+          renderResults("");
+        } else {
+          const err = document.getElementById("loginError");
+          err.textContent = "Unknown adventurer. Try again.";
+          document.getElementById("loginInput").value = "";
+          setTimeout(() => { err.textContent = ""; }, 2500);
+        }
+      }
+
+      document.getElementById("loginBtn").addEventListener("click", attemptLogin);
+      document.getElementById("loginInput").addEventListener("keydown", e => { if (e.key === "Enter") attemptLogin(); });
+
+      // Check existing session
+      if (sessionStorage.getItem("alAuth")) {
+        document.getElementById("loginScreen").classList.add("hidden");
+        document.getElementById("mainApp").classList.remove("hidden");
         renderResults("");
+      }
       });
 
-      renderResults("");
+      // Login gate
+      function attemptLogin() {
+        const val = document.getElementById("loginInput").value.trim().toLowerCase();
+        if (VALID_USERS.includes(val)) {
+          sessionStorage.setItem("alAuth", val);
+          document.getElementById("loginScreen").classList.add("hidden");
+          document.getElementById("mainApp").classList.remove("hidden");
+          renderResults("");
+        } else {
+          const err = document.getElementById("loginError");
+          err.textContent = "Unknown adventurer. Try again.";
+          document.getElementById("loginInput").value = "";
+          setTimeout(() => { err.textContent = ""; }, 2500);
+        }
+      }
+
+      document.getElementById("loginBtn").addEventListener("click", attemptLogin);
+      document.getElementById("loginInput").addEventListener("keydown", e => { if (e.key === "Enter") attemptLogin(); });
+
+      // Check existing session
+      if (sessionStorage.getItem("alAuth")) {
+        document.getElementById("loginScreen").classList.add("hidden");
+        document.getElementById("mainApp").classList.remove("hidden");
+        renderResults("");
+      }
     });
   </script>
 
@@ -755,6 +804,104 @@
       background-clip: text;
     }
 
+    /* ── Login screen ── */
+    #loginScreen {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(160deg, #0d0020 0%, #1a0050 50%, #0d0020 100%);
+      padding: 24px;
+    }
+    .login-card {
+      background: linear-gradient(160deg, #110030, #1a0040);
+      border: 2px solid #7744cc;
+      border-radius: 16px;
+      padding: 40px 32px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+      box-shadow: 0 0 60px rgba(120,60,255,0.35);
+      position: relative;
+    }
+    .login-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 14px;
+      padding: 2px;
+      background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+    .login-icon { font-size: 56px; margin-bottom: 12px; }
+    .login-title {
+      font-family: "Cinzel Decorative", serif;
+      font-size: 26px;
+      background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 4px;
+    }
+    .login-sub {
+      font-family: "IM Fell English", serif;
+      font-style: italic;
+      color: #c8a87a;
+      font-size: 13px;
+      margin-bottom: 28px;
+      letter-spacing: 1px;
+    }
+    .login-prompt {
+      font-family: "IM Fell English", serif;
+      font-size: 16px;
+      color: #aa88dd;
+      margin-bottom: 16px;
+      font-style: italic;
+    }
+    .login-input {
+      width: 100%;
+      padding: 16px 18px;
+      font-family: "IM Fell English", serif;
+      font-size: 22px;
+      background: #0d0020;
+      color: #f0e6d3;
+      border: 2px solid #5533aa;
+      border-radius: 8px;
+      outline: none;
+      text-align: center;
+      margin-bottom: 14px;
+      transition: border-color 0.2s;
+    }
+    .login-input::placeholder { color: #6655aa; }
+    .login-input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
+    .login-btn {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, #5533aa, #7744cc);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-family: "Cinzel", serif;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 1px;
+      box-shadow: 0 2px 14px rgba(100,60,200,0.5);
+      margin-bottom: 12px;
+    }
+    .login-btn:hover { background: linear-gradient(135deg, #6644bb, #8855dd); }
+    .login-error {
+      font-family: "IM Fell English", serif;
+      font-style: italic;
+      color: #ff6655;
+      font-size: 15px;
+      min-height: 22px;
+    }
+
     /* scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0d0020; }
@@ -763,6 +910,21 @@
 </head>
 <body>
 
+<div id="loginScreen">
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-icon">⚔️</div>
+    <h1 class="login-title">Adventurer Log</h1>
+    <p class="login-sub">Champions of Woodfordia</p>
+    <p class="login-prompt">Enter Login Password to Continue</p>
+    <input type="text" id="loginInput" class="login-input" placeholder="Password…" type="password" autocomplete="off" autocorrect="off" spellcheck="false">
+    <button id="loginBtn" class="login-btn">Enter</button>
+    <div id="loginError" class="login-error"></div>
+  </div>
+</div>
+</div>
+
+<div id="mainApp" class="hidden">
 <header>
   <h1>Adventurer Log</h1>
   <p>Champions of Woodfordia</p>
@@ -858,5 +1020,8 @@
   </div>
 </div>
 
+</div><!-- end mainApp -->
+
 </body>
 </html>
+
