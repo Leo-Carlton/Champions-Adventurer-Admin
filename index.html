@@ -23,19 +23,19 @@
     };
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
-    // Quests Completed thresholds: index = level, value = quests needed to REACH that level
-    const LEVEL_THRESHOLDS = [0, 0, 4, 8, 12];
+    // Quest points thresholds to reach each level
+    const LEVEL_THRESHOLDS = [0, 0, 4, 10, 16];
     const VALID_USERS = ["lando", "red", "rogue", "prism", "neoninja", "glenderella"];
 
-    function calcLevel(quests, secretQuest) {
-      if (secretQuest && quests >= 12) return 5;
+    function calcLevel(points, secretQuest) {
+      if (secretQuest && points >= 16) return 5;
       for (let lvl = 4; lvl >= 1; lvl--) {
-        if (quests >= LEVEL_THRESHOLDS[lvl]) return lvl;
+        if (points >= LEVEL_THRESHOLDS[lvl]) return lvl;
       }
       return 1;
     }
 
-    function questsForNextLevel(level) {
+    function pointsForNextLevel(level) {
       if (level >= 4) return null;
       return LEVEL_THRESHOLDS[level + 1];
     }
@@ -67,7 +67,7 @@
     }
 
     function fuzzySearch(q) {
-      if (!q.trim()) return [...allPlayers].sort((a, b) => (b.quests ?? 0) - (a.quests ?? 0) || a.name.localeCompare(b.name)).slice(0, 40);
+      if (!q.trim()) return [...allPlayers].sort((a, b) => (b.questPoints ?? 0) - (a.questPoints ?? 0) || a.name.localeCompare(b.name)).slice(0, 40);
       return allPlayers
         .map(p => ({ ...p, _score: score(p.name, q) }))
         .filter(p => p._score > 20)
@@ -81,14 +81,13 @@
       if (!results.length) {
         list.innerHTML = `<li class="empty">No adventurers found.</li>`;
       }
-      // Pre-fill enrol only if the search term is not a prefix of any existing player name
       const isPrefix = allPlayers.some(p => p.name.toLowerCase().startsWith(q.trim().toLowerCase()));
       document.getElementById("newPlayerName").value = q.trim() && !isPrefix ? q.trim() : "";
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
       const guildColors = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
       list.innerHTML = results.map(p => {
-        const quests = p.quests ?? 0;
-        const lvl = calcLevel(quests, p.secretQuest);
+        const points = p.questPoints ?? 0;
+        const lvl = calcLevel(points, p.secretQuest);
         const lvlColor = lvlColors[lvl] || "#c8b89a";
         const guild = p.guild && p.guild !== "None" ? p.guild : null;
         const guildColor = guildColors[guild] || "#9980bb";
@@ -101,7 +100,7 @@
           <span class="player-meta-new">
             <span style="font-size:16px;color:#aa88dd">𝑳𝐕𝑳</span><span style="color:${lvlColor};font-size:22px;font-weight:700">${lvl}</span>
             <span class="meta-dot">·</span>
-            <span style="font-size:20px">📜</span><span style="font-size:18px">${quests}</span>
+            <span style="font-size:20px">📜</span><span style="font-size:18px">${points}pts</span>
             <span class="meta-dot">·</span>
             <span style="font-size:20px">🔵</span><span style="color:#888;font-size:18px;font-weight:700">${p.glory ?? 0}</span>
             <span class="meta-dot">·</span>
@@ -122,13 +121,13 @@
 
     function showEditor() {
       const p = selectedPlayer;
-      const quests = p.quests ?? 0;
+      const points = p.questPoints ?? 0;
       document.getElementById("editorName").textContent = p.name;
-      document.getElementById("editorQuests").value = quests;
+      document.getElementById("editorPoints").value = points;
       document.getElementById("editorGlory").value = p.glory ?? 0;
       document.getElementById("editorGuild").value = p.guild || "None";
       document.getElementById("editorMsg").textContent = "";
-      updateLevelDisplay(quests, p.secretQuest);
+      updateLevelDisplay(points, p.secretQuest);
       const sqBtn = document.getElementById("secretQuestBtn");
       if (p.secretQuest) {
         sqBtn.textContent = "✔ Secret Quest Complete";
@@ -140,33 +139,64 @@
         sqBtn.disabled = false;
       }
       document.getElementById("playerEditor").classList.remove("hidden");
-      document.getElementById("editorQuests").focus();
     }
 
-    function updateLevelDisplay(quests, secretQuest) {
-      const lvl = calcLevel(quests, secretQuest);
-      const next = questsForNextLevel(lvl);
+    function updateLevelDisplay(points, secretQuest) {
+      const lvl = calcLevel(points, secretQuest);
+      const next = pointsForNextLevel(lvl);
       const lvlEl = document.getElementById("levelDisplay");
       let nextTxt = "";
       if (lvl < 4) {
-        nextTxt = ` <span class="next-lvl">(${next - quests} more quests for Lvl ${lvl + 1})</span>`;
+        nextTxt = ` <span class="next-lvl">(${next - points} more pts for Lvl ${lvl + 1})</span>`;
       } else if (lvl === 4 && !secretQuest) {
         nextTxt = ` <span class="next-lvl">(Complete secret quest for Lvl 5)</span>`;
       }
-      lvlEl.innerHTML = `Level <strong>${lvl}</strong>${nextTxt}`;
+      lvlEl.innerHTML = `Level <strong>${lvl}</strong> &nbsp;<span style="font-size:16px;color:#9977cc">${points} quest pts</span>${nextTxt}`;
     }
 
-    async function savePlayer() {
-      const quests = parseInt(document.getElementById("editorQuests").value) || 0;
+    // Add quest points from button press
+    async function addQuestPoints(amount) {
+      if (!selectedPlayer) return;
+      const currentPoints = parseInt(document.getElementById("editorPoints").value) || 0;
+      const newPoints = currentPoints + amount;
+      document.getElementById("editorPoints").value = newPoints;
+      updateLevelDisplay(newPoints, selectedPlayer.secretQuest);
+
+      const oldLvl = calcLevel(currentPoints, selectedPlayer.secretQuest);
+      const newLvl = calcLevel(newPoints, selectedPlayer.secretQuest);
       const glory = parseInt(document.getElementById("editorGlory").value) || 0;
       const guild = document.getElementById("editorGuild").value;
       const msg = document.getElementById("editorMsg");
-      const oldQuests = selectedPlayer.quests ?? 0;
-      const oldLvl = calcLevel(oldQuests, selectedPlayer.secretQuest);
-      const newLvl = calcLevel(quests, selectedPlayer.secretQuest);
+
       try {
-        await updateDoc(doc(db, "players", selectedPlayer.id), { quests, glory, guild });
-        selectedPlayer.quests = quests; selectedPlayer.glory = glory; selectedPlayer.guild = guild;
+        await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: newPoints, glory, guild });
+        selectedPlayer.questPoints = newPoints;
+        selectedPlayer.glory = glory;
+        selectedPlayer.guild = guild;
+        if (newLvl > oldLvl) {
+          showLevelUp(selectedPlayer.name, newLvl);
+        } else {
+          msg.textContent = `+${amount} quest pt${amount > 1 ? "s" : ""} added!`;
+          msg.style.color = "#66cc66";
+          setTimeout(() => { msg.textContent = ""; }, 2000);
+        }
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#c0392b";
+      }
+    }
+
+    async function savePlayer() {
+      const points = parseInt(document.getElementById("editorPoints").value) || 0;
+      const glory = parseInt(document.getElementById("editorGlory").value) || 0;
+      const guild = document.getElementById("editorGuild").value;
+      const msg = document.getElementById("editorMsg");
+      const oldPoints = selectedPlayer.questPoints ?? 0;
+      const oldLvl = calcLevel(oldPoints, selectedPlayer.secretQuest);
+      const newLvl = calcLevel(points, selectedPlayer.secretQuest);
+      try {
+        await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: points, glory, guild });
+        selectedPlayer.questPoints = points; selectedPlayer.glory = glory; selectedPlayer.guild = guild;
         if (newLvl > oldLvl) {
           showLevelUp(selectedPlayer.name, newLvl);
         } else {
@@ -181,10 +211,10 @@
     }
 
     async function completeSecretQuest() {
-      const quests = parseInt(document.getElementById("editorQuests").value) || selectedPlayer.quests || 0;
-      if (quests < 12) {
+      const points = parseInt(document.getElementById("editorPoints").value) || selectedPlayer.questPoints || 0;
+      if (points < 16) {
         const msg = document.getElementById("editorMsg");
-        msg.textContent = "Adventurer needs 12 quests completed before completing the secret quest.";
+        msg.textContent = "Adventurer needs 16 quest points before completing the secret quest.";
         msg.style.color = "#c0392b";
         return;
       }
@@ -195,7 +225,7 @@
         sqBtn.textContent = "✔ Secret Quest Complete";
         sqBtn.classList.add("sq-done");
         sqBtn.disabled = true;
-        updateLevelDisplay(quests, true);
+        updateLevelDisplay(points, true);
         showLevelUp(selectedPlayer.name, 5);
       } catch (e) {
         document.getElementById("editorMsg").textContent = "Error: " + e.message;
@@ -234,9 +264,9 @@
       }
       const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
       try {
-        await setDoc(doc(db, "players", id), { name, quests: 0, glory: 0, guild: "None", secretQuest: false });
+        await setDoc(doc(db, "players", id), { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false });
         document.getElementById("newPlayerName").value = "";
-        msg.textContent = `✔ "${name}" added (Lvl 1, 0 quests).`;
+        msg.textContent = `✔ "${name}" added (Lvl 1, 0 quest pts).`;
         msg.style.color = "#2a6e2a";
         setTimeout(() => { msg.textContent = ""; }, 3000);
       } catch (e) {
@@ -296,18 +326,19 @@
       );
       const members = allPlayers
         .filter(p => p.guild === activeGuildTab)
-        .sort((a, b) => (b.quests ?? 0) - (a.quests ?? 0));
+        .sort((a, b) => (b.questPoints ?? 0) - (a.questPoints ?? 0));
       if (!members.length) {
         tbody.innerHTML = `<tr><td colspan="3" class="empty">No members in ${activeGuildTab} yet.</td></tr>`;
         return;
       }
       tbody.innerHTML = members.map((p, i) => {
-        const quests = p.quests ?? 0;
+        const points = p.questPoints ?? 0;
+        const lvl = calcLevel(points, p.secretQuest);
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
-          <td>${p.name}</td>
-          <td class="num">${quests}</td>
+          <td>${p.name}<br><small>Lvl ${lvl}</small></td>
+          <td class="num">${points}pts</td>
         </tr>`;
       }).join("");
     }
@@ -326,7 +357,6 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-      // Login gate — always shown on page load, no session persistence
       function attemptLogin() {
         const val = document.getElementById("loginInput").value.trim().toLowerCase();
         if (VALID_USERS.includes(val)) {
@@ -343,26 +373,30 @@
       document.getElementById("loginBtn").addEventListener("click", attemptLogin);
       document.getElementById("loginInput").addEventListener("keydown", e => { if (e.key === "Enter") attemptLogin(); });
 
-      // Main app listeners (only active after login)
       document.querySelectorAll(".tab-btn").forEach(btn =>
         btn.addEventListener("click", () => switchTab(btn.dataset.tab))
       );
       document.getElementById("searchInput").addEventListener("input", e => renderResults(e.target.value));
-      document.getElementById("editorQuests").addEventListener("input", () => {
+      document.getElementById("editorPoints").addEventListener("input", () => {
         if (!selectedPlayer) return;
-        updateLevelDisplay(parseInt(document.getElementById("editorQuests").value) || 0, selectedPlayer.secretQuest);
+        updateLevelDisplay(parseInt(document.getElementById("editorPoints").value) || 0, selectedPlayer.secretQuest);
       });
       document.getElementById("closeEditor").addEventListener("click", () => {
         document.getElementById("playerEditor").classList.add("hidden");
         selectedPlayer = null;
       });
+
+      // Quest point buttons
+      document.getElementById("questBtn1").addEventListener("click", () => addQuestPoints(1));
+      document.getElementById("questBtn2").addEventListener("click", () => addQuestPoints(2));
+      document.getElementById("questBtn3").addEventListener("click", () => addQuestPoints(3));
+
       document.getElementById("saveBtn").addEventListener("click", savePlayer);
       document.getElementById("secretQuestBtn").addEventListener("click", completeSecretQuest);
       document.getElementById("deleteBtn").addEventListener("click", deletePlayer);
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
 
-      // Huzzah button closes level-up overlay and editor, returns to home
       document.getElementById("levelUpClose").addEventListener("click", () => {
         document.getElementById("levelUpOverlay").classList.add("hidden");
         document.getElementById("playerEditor").classList.add("hidden");
@@ -385,13 +419,6 @@
       min-height: 100vh;
     }
 
-    .rainbow-text {
-      background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
     header {
       background: linear-gradient(135deg, #0d0020 0%, #1a0050 50%, #0d0020 100%);
       border-bottom: 3px solid transparent;
@@ -407,7 +434,6 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      text-shadow: none;
       letter-spacing: 2px;
     }
     header p {
@@ -439,10 +465,8 @@
       cursor: pointer;
       color: #9980bb;
       white-space: nowrap;
-      transition: color 0.2s, background 0.2s;
     }
     .tab-btn.active {
-      background: #1a0a2e;
       background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -464,7 +488,6 @@
       border-radius: 8px;
       margin-bottom: 14px;
       outline: none;
-      transition: border-color 0.2s;
     }
     #searchInput::placeholder { color: #6655aa; }
     #searchInput:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
@@ -498,7 +521,6 @@
       font-weight: 700;
       cursor: pointer;
       letter-spacing: 1px;
-      box-shadow: 0 2px 8px rgba(0,180,0,0.3);
     }
     #addMsg { margin-bottom: 10px; font-size: 15px; min-height: 22px; font-style: italic; }
 
@@ -526,7 +548,6 @@
       font-size: 16px;
       color: #e8d5ff;
     }
-    .player-meta { font-size: 13px; color: #9980bb; text-align: right; }
     .player-meta-new {
       display: flex;
       align-items: center;
@@ -540,6 +561,7 @@
     .meta-dot { color: #4a3a6a; font-size: 16px; }
     .empty { padding: 20px; color: #6655aa; text-align: center; font-size: 15px; display: block; font-style: italic; }
 
+    /* ── Player Editor Modal ── */
     #playerEditor {
       position: fixed;
       inset: 0;
@@ -596,7 +618,7 @@
       color: #cc99ff;
     }
     #levelDisplay strong { font-size: 28px; color: #ffcc44; font-family: 'Cinzel', serif; }
-    .next-lvl { color: #8877aa; font-size: 16px; }
+    .next-lvl { color: #8877aa; font-size: 14px; display: block; margin-top: 4px; }
 
     .field { margin-bottom: 18px; }
     .field label {
@@ -611,7 +633,7 @@
     }
     .field input, .field select {
       width: 100%;
-      padding: 16px 16px;
+      padding: 16px;
       font-family: 'IM Fell English', serif;
       font-size: 22px;
       background: #0d0020;
@@ -622,6 +644,51 @@
     }
     .field select option { background: #1a0040; color: #f0e6d3; }
     .field input:focus, .field select:focus { border-color: #aa66ff; }
+
+    /* ── Quest point buttons ── */
+    .quest-btn-label {
+      font-family: 'Cinzel', serif;
+      font-size: 14px;
+      font-weight: 600;
+      color: #aa88dd;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-bottom: 10px;
+    }
+    .quest-btns {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .quest-btn {
+      flex: 1;
+      padding: 16px 8px;
+      border: none;
+      border-radius: 10px;
+      font-family: 'Cinzel', serif;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      transition: filter 0.15s, transform 0.1s;
+      color: #fff;
+    }
+    .quest-btn:active { transform: scale(0.96); }
+    .quest-btn:hover { filter: brightness(1.15); }
+    #questBtn1 {
+      background: linear-gradient(135deg, #2255aa, #3377cc);
+      box-shadow: 0 2px 10px rgba(50,100,200,0.4);
+    }
+    #questBtn2 {
+      background: linear-gradient(135deg, #aa5500, #cc7722);
+      box-shadow: 0 2px 10px rgba(180,100,20,0.4);
+    }
+    #questBtn3 {
+      background: linear-gradient(135deg, #880088, #bb22bb);
+      box-shadow: 0 2px 10px rgba(150,30,150,0.4);
+    }
+    .quest-btn .btn-tier { font-size: 11px; opacity: 0.85; display: block; margin-bottom: 4px; letter-spacing: 1px; }
+    .quest-btn .btn-pts { font-size: 22px; }
 
     #secretQuestBtn {
       width: 100%;
@@ -673,6 +740,7 @@
 
     #editorMsg { margin-top: 12px; font-size: 17px; min-height: 24px; text-align: center; font-style: italic; }
 
+    /* ── Level up overlay ── */
     #levelUpOverlay {
       position: fixed;
       inset: 0;
@@ -736,6 +804,7 @@
       letter-spacing: 1px;
     }
 
+    /* ── Tables ── */
     table {
       width: 100%;
       border-collapse: collapse;
@@ -765,16 +834,12 @@
     .rank { font-family: 'Cinzel', serif; font-weight: 700; color: #aa88cc; width: 48px; font-size: 16px; }
     .num { font-family: 'Cinzel', serif; font-weight: 700; color: #ffcc44; text-align: right; }
     th:last-child { text-align: right; }
-    .rank-1 td { background: rgba(255, 200, 0, 0.08); }
-    .rank-2 td { background: rgba(180, 180, 200, 0.05); }
-    .rank-3 td { background: rgba(200, 120, 60, 0.07); }
+    .rank-1 td { background: rgba(255,200,0,0.08); }
+    .rank-2 td { background: rgba(180,180,200,0.05); }
+    .rank-3 td { background: rgba(200,120,60,0.07); }
 
-    #guildTabBar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
+    /* ── Guild tabs ── */
+    #guildTabBar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
     .guild-tab-btn {
       padding: 8px 16px;
       border: 2px solid #5533aa;
@@ -804,6 +869,7 @@
       background-clip: text;
     }
 
+    /* ── Login ── */
     #loginScreen {
       min-height: 100vh;
       display: flex;
@@ -873,7 +939,6 @@
       outline: none;
       text-align: center;
       margin-bottom: 14px;
-      transition: border-color 0.2s;
     }
     .login-input::placeholder { color: #6655aa; }
     .login-input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
@@ -909,17 +974,17 @@
 <body>
 
 <div id="loginScreen">
-<div class="login-wrap">
-  <div class="login-card">
-    <div class="login-icon">⚔️</div>
-    <h1 class="login-title">Adventurer Log</h1>
-    <p class="login-sub">Champions of Woodfordia</p>
-    <p class="login-prompt">Enter Login Password to Continue</p>
-    <input type="text" id="loginInput" class="login-input" placeholder="Password…" type="password" autocomplete="off" autocorrect="off" spellcheck="false">
-    <button id="loginBtn" class="login-btn">Enter</button>
-    <div id="loginError" class="login-error"></div>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-icon">⚔️</div>
+      <h1 class="login-title">Adventurer Log</h1>
+      <p class="login-sub">Champions of Woodfordia</p>
+      <p class="login-prompt">Enter Login Password to Continue</p>
+      <input type="text" id="loginInput" class="login-input" placeholder="Password…" autocomplete="off" autocorrect="off" spellcheck="false">
+      <button id="loginBtn" class="login-btn">Enter</button>
+      <div id="loginError" class="login-error"></div>
+    </div>
   </div>
-</div>
 </div>
 
 <div id="mainApp" class="hidden">
@@ -937,13 +1002,11 @@
 <!-- Search Tab -->
 <div class="tab-panel" id="tab-search">
   <input type="text" id="searchInput" placeholder="Search adventurer name…" autocomplete="off" autocorrect="off" spellcheck="false">
-
   <div class="add-section">
     <input type="text" id="newPlayerName" placeholder="Enrol new adventurer…">
     <button id="addPlayerBtn">Enrol</button>
   </div>
   <div id="addMsg"></div>
-
   <ul id="resultsList"></ul>
 </div>
 
@@ -965,7 +1028,7 @@
   <div id="guildHeader"></div>
   <table>
     <thead>
-      <tr><th>#</th><th>Adventurer</th><th style="text-align:right">Quests</th></tr>
+      <tr><th>#</th><th>Adventurer</th><th style="text-align:right">Quest Pts</th></tr>
     </thead>
     <tbody id="guildBody">
       <tr><td colspan="3" class="empty">Loading…</td></tr>
@@ -980,10 +1043,29 @@
       <h2 id="editorName">Adventurer</h2>
       <button id="closeEditor">✕</button>
     </div>
+
     <div id="levelDisplay">Level <strong>1</strong></div>
+
+    <!-- Quest point quick-add buttons -->
+    <div class="quest-btn-label">Add Quest Points</div>
+    <div class="quest-btns">
+      <button class="quest-btn" id="questBtn1">
+        <span class="btn-tier">Tier 1</span>
+        <span class="btn-pts">+1 pt</span>
+      </button>
+      <button class="quest-btn" id="questBtn2">
+        <span class="btn-tier">Tier 2</span>
+        <span class="btn-pts">+2 pts</span>
+      </button>
+      <button class="quest-btn" id="questBtn3">
+        <span class="btn-tier">Tier 3</span>
+        <span class="btn-pts">+3 pts</span>
+      </button>
+    </div>
+
     <div class="field">
-      <label>Quests Completed</label>
-      <input type="number" id="editorQuests" min="0" placeholder="0">
+      <label>Total Quest Points</label>
+      <input type="number" id="editorPoints" min="0" placeholder="0">
     </div>
     <div class="field">
       <label>Glory</label>
@@ -1018,6 +1100,5 @@
 </div>
 
 </div><!-- end mainApp -->
-
 </body>
 </html>
