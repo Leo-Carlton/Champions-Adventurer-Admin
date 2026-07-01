@@ -233,9 +233,9 @@
 
       const sqBtn = document.getElementById("secretQuestBtn");
       if (p.secretQuest) {
-        sqBtn.textContent = "✔ Secret Quest Complete";
+        sqBtn.textContent = "✔ Secret Quest Complete — Tap to Undo";
         sqBtn.classList.add("sq-done");
-        sqBtn.disabled = true;
+        sqBtn.disabled = false;
       } else {
         sqBtn.textContent = "🔐 Mark Secret Quest Complete";
         sqBtn.classList.remove("sq-done");
@@ -252,15 +252,20 @@
       const next = pointsForNextLevel(lvl);
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
       const lvlEl = document.getElementById("levelDisplay");
-      let nextTxt = "";
-      if (lvl < 4) {
-        nextTxt = ` <span class="next-lvl">(${next - points} more pts for Lvl ${lvl + 1})</span>`;
-      } else if (lvl === 4 && !secretQuest) {
-        nextTxt = ` <span class="next-lvl">(Complete secret quest for Lvl 5)</span>`;
-      }
-      lvlEl.innerHTML = `Level <strong style="color:${lvlColors[lvl]}">${lvl}</strong> &nbsp;<span style="font-size:16px;color:#9977cc">${points} quest pts</span>${nextTxt}`;
+      lvlEl.innerHTML = `Level <strong style="color:${lvlColors[lvl]}">${lvl}</strong>`;
 
-      // Also update header badge
+      // Update next-level callout
+      const nextEl = document.getElementById("nextLevelCallout");
+      if (lvl < 4) {
+        const needed = next - points;
+        nextEl.innerHTML = `<span class="next-lvl-big">${needed} pt${needed !== 1 ? "s" : ""} to Level ${lvl + 1}</span>`;
+      } else if (lvl === 4 && !secretQuest) {
+        nextEl.innerHTML = `<span class="next-lvl-big">Complete secret quest for Level 5</span>`;
+      } else {
+        nextEl.innerHTML = `<span class="next-lvl-big next-lvl-max">⭐ Max Level Reached</span>`;
+      }
+
+      // Update header badge
       if (selectedPlayer) {
         document.getElementById("editorNameLvl").textContent = `Lvl ${lvl}`;
         document.getElementById("editorNameLvl").style.color = lvlColors[lvl] || "#c8b89a";
@@ -324,25 +329,44 @@
       }
     }
 
-    async function completeSecretQuest() {
+    async function toggleSecretQuest() {
       const points = parseInt(document.getElementById("editorPoints").value) || selectedPlayer.questPoints || 0;
-      if (points < 16) {
-        const msg = document.getElementById("editorMsg");
-        msg.textContent = "Adventurer needs 16 quest points before completing the secret quest.";
-        msg.style.color = "#c0392b";
-        return;
-      }
-      try {
-        await updateDoc(doc(db, "players", selectedPlayer.id), { secretQuest: true });
-        selectedPlayer.secretQuest = true;
-        const sqBtn = document.getElementById("secretQuestBtn");
-        sqBtn.textContent = "✔ Secret Quest Complete";
-        sqBtn.classList.add("sq-done");
-        sqBtn.disabled = true;
-        updateLevelDisplay(points, true);
-        showLevelUp(selectedPlayer.name, 5);
-      } catch (e) {
-        document.getElementById("editorMsg").textContent = "Error: " + e.message;
+      const sqBtn = document.getElementById("secretQuestBtn");
+      const msg = document.getElementById("editorMsg");
+
+      if (selectedPlayer.secretQuest) {
+        // Uncheck it
+        try {
+          await updateDoc(doc(db, "players", selectedPlayer.id), { secretQuest: false });
+          selectedPlayer.secretQuest = false;
+          sqBtn.textContent = "🔐 Mark Secret Quest Complete";
+          sqBtn.classList.remove("sq-done");
+          updateLevelDisplay(points, false);
+          msg.textContent = "Secret quest unchecked.";
+          msg.style.color = "#aa88dd";
+          setTimeout(() => { msg.textContent = ""; }, 2000);
+        } catch (e) {
+          msg.textContent = "Error: " + e.message;
+          msg.style.color = "#c0392b";
+        }
+      } else {
+        // Check it
+        if (points < 16) {
+          msg.textContent = "Adventurer needs 16 quest points before completing the secret quest.";
+          msg.style.color = "#c0392b";
+          return;
+        }
+        try {
+          await updateDoc(doc(db, "players", selectedPlayer.id), { secretQuest: true });
+          selectedPlayer.secretQuest = true;
+          sqBtn.textContent = "✔ Secret Quest Complete — Tap to Undo";
+          sqBtn.classList.add("sq-done");
+          updateLevelDisplay(points, true);
+          showLevelUp(selectedPlayer.name, 5);
+        } catch (e) {
+          msg.textContent = "Error: " + e.message;
+          msg.style.color = "#c0392b";
+        }
       }
     }
 
@@ -510,7 +534,20 @@
       document.getElementById("awardGloryBtn").addEventListener("click", awardGlory);
 
       document.getElementById("saveBtn").addEventListener("click", savePlayer);
-      document.getElementById("secretQuestBtn").addEventListener("click", completeSecretQuest);
+
+      // Per-tab save buttons
+      async function saveAndFlash(btnId) {
+        await savePlayer();
+        const btn = document.getElementById(btnId);
+        const msg = btn.nextElementSibling;
+        msg.textContent = "✔ Saved!";
+        msg.style.color = "#66cc66";
+        setTimeout(() => { msg.textContent = ""; }, 2000);
+      }
+      document.getElementById("saveBtnQuest").addEventListener("click", () => saveAndFlash("saveBtnQuest"));
+      document.getElementById("saveBtnGlory").addEventListener("click", () => saveAndFlash("saveBtnGlory"));
+      document.getElementById("saveBtnGuild").addEventListener("click", () => saveAndFlash("saveBtnGuild"));
+      document.getElementById("secretQuestBtn").addEventListener("click", toggleSecretQuest);
       document.getElementById("deleteBtn").addEventListener("click", deletePlayer);
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
@@ -744,6 +781,19 @@
     .login-btn:hover { background: linear-gradient(135deg, #6644bb, #8855dd); }
     .login-error { font-family: "IM Fell English", serif; font-style: italic; color: #ff6655; font-size: 15px; min-height: 22px; }
 
+    /* next level callout */
+    #nextLevelCallout { text-align: center; margin: 10px 0 20px; }
+    .next-lvl-big { font-family: 'Cinzel', serif; font-size: 22px; font-weight: 700; color: #ffcc44; letter-spacing: 1px; }
+    .next-lvl-max { color: #ffd700; }
+
+    /* per-tab save buttons */
+    .tab-save-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #1a5fa8, #2980b9); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; cursor: pointer; margin-top: 8px; letter-spacing: 1px; box-shadow: 0 2px 12px rgba(40,120,200,0.4); }
+    .tab-save-btn:hover { filter: brightness(1.1); }
+    .tab-save-msg { font-size: 15px; min-height: 20px; text-align: center; font-style: italic; margin-top: 8px; }
+
+    /* sq-done toggle style */
+    #secretQuestBtn.sq-done { background: linear-gradient(135deg, #3a7a3a, #2a6a2a); box-shadow: 0 2px 12px rgba(50,150,50,0.3); cursor: pointer; }
+
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0d0020; }
     ::-webkit-scrollbar-thumb { background: #5533aa; border-radius: 3px; }
@@ -840,6 +890,7 @@
     <div class="editor-tab-panel" data-epanel="quest">
       <div class="panel-title quest-color">📜 Quest Points</div>
       <div id="levelDisplay">Level <strong>1</strong></div>
+      <div id="nextLevelCallout"><span class="next-lvl-big">— pts to next level</span></div>
       <div class="quest-btn-label">Quick Add</div>
       <div class="quest-btns">
         <button class="quest-btn" id="questBtn1"><span class="btn-tier">Tier 1</span><span class="btn-pts">+1 pt</span></button>
@@ -850,6 +901,8 @@
         <label>Total Quest Points</label>
         <input type="number" id="editorPoints" min="0" placeholder="0">
       </div>
+      <button class="tab-save-btn" id="saveBtnQuest">Save</button>
+      <div class="tab-save-msg"></div>
     </div>
 
     <!-- Glory Panel -->
@@ -866,6 +919,8 @@
       <div class="glory-manual-row">
         <input type="number" id="editorGlory" min="0" placeholder="0">
       </div>
+      <button class="tab-save-btn" id="saveBtnGlory">Save</button>
+      <div class="tab-save-msg"></div>
     </div>
 
     <!-- Guild Panel -->
@@ -882,6 +937,8 @@
           <option value="Inventors">Inventors</option>
         </select>
       </div>
+      <button class="tab-save-btn" id="saveBtnGuild">Save</button>
+      <div class="tab-save-msg"></div>
     </div>
 
     <!-- Other Panel -->
