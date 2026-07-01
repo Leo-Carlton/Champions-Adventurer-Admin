@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Adventurer Log</title>
-  <link href="https://fonts.googleapis.com/css2?family=MedievalSharp&family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -23,7 +23,6 @@
     };
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
-    // Quest points thresholds to reach each level
     const LEVEL_THRESHOLDS = [0, 0, 4, 10, 16];
     const VALID_USERS = ["lando", "red", "rogue", "prism", "neoninja", "glenderella"];
 
@@ -40,6 +39,39 @@
       return LEVEL_THRESHOLDS[level + 1];
     }
 
+    // Returns the glory rank (1-based) of a player, or null if not in top 30
+    function getGloryRank(playerId) {
+      const sorted = [...allPlayers].sort((a, b) => (b.glory ?? 0) - (a.glory ?? 0));
+      const idx = sorted.findIndex(p => p.id === playerId);
+      if (idx === -1 || idx >= 30) return null;
+      return idx + 1;
+    }
+
+    // Calculate glory to award for a win against opponent
+    function calcGloryGain(winner, opponent) {
+      const winnerLvl = calcLevel(winner.questPoints ?? 0, winner.secretQuest);
+      const oppLvl = calcLevel(opponent.questPoints ?? 0, opponent.secretQuest);
+      const oppRank = getGloryRank(opponent.id);
+
+      let glory = 1; // base win
+      const breakdown = ["+1 base win"];
+
+      if (oppLvl > winnerLvl) {
+        glory += 1;
+        breakdown.push("+1 higher level opponent");
+      }
+      if (oppRank !== null && oppRank <= 30) {
+        glory += 1;
+        breakdown.push("+1 leaderboard opponent (top 30)");
+      }
+      if (oppRank !== null && oppRank <= 3) {
+        glory += 1;
+        breakdown.push("+1 top 3 opponent");
+      }
+
+      return { glory, breakdown };
+    }
+
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
     const playersCol = collection(db, "players");
@@ -48,14 +80,19 @@
     let selectedPlayer = null;
     let activeTab = "search";
     let activeGuildTab = null;
+    let selectedOpponent = null; // for glory battle search
 
     onSnapshot(query(playersCol, orderBy("name")), (snap) => {
       allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (activeTab === "glory")  renderGloryLeaderboard();
       if (activeTab === "guild")  renderGuildLeaderboard();
       if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
+      // refresh opponent search if open
+      const oppInput = document.getElementById("opponentSearch");
+      if (oppInput && oppInput.value) renderOpponentResults(oppInput.value);
     });
 
+    // ── Fuzzy search ──────────────────────────────────────────────────────────
     function score(name, q) {
       name = name.toLowerCase(); q = q.toLowerCase();
       if (name === q) return 1000;
@@ -66,18 +103,20 @@
       return matched / q.length * 100;
     }
 
-    function fuzzySearch(q) {
-      if (!q.trim()) return [...allPlayers].sort((a, b) => (b.questPoints ?? 0) - (a.questPoints ?? 0) || a.name.localeCompare(b.name)).slice(0, 40);
-      return allPlayers
+    function fuzzySearch(q, excludeId) {
+      const pool = excludeId ? allPlayers.filter(p => p.id !== excludeId) : allPlayers;
+      if (!q.trim()) return pool.sort((a, b) => (b.questPoints ?? 0) - (a.questPoints ?? 0)).slice(0, 40);
+      return pool
         .map(p => ({ ...p, _score: score(p.name, q) }))
         .filter(p => p._score > 20)
         .sort((a, b) => b._score - a._score)
-        .slice(0, 15);
+        .slice(0, 10);
     }
 
+    // ── Main player search ────────────────────────────────────────────────────
     function renderResults(q) {
       const list = document.getElementById("resultsList");
-      const results = fuzzySearch(q);
+      const results = fuzzySearch(q, null);
       if (!results.length) {
         list.innerHTML = `<li class="empty">No adventurers found.</li>`;
       }
@@ -113,6 +152,78 @@
       });
     }
 
+    // ── Opponent search (inside glory section) ────────────────────────────────
+    function renderOpponentResults(q) {
+      const list = document.getElementById("opponentResults");
+      if (!q.trim()) { list.innerHTML = ""; return; }
+      const results = fuzzySearch(q, selectedPlayer?.id);
+      if (!results.length) {
+        list.innerHTML = `<li class="opp-empty">No adventurers found.</li>`;
+        return;
+      }
+      const sorted = [...allPlayers].sort((a, b) => (b.glory ?? 0) - (a.glory ?? 0));
+      list.innerHTML = results.map(p => {
+        const rank = sorted.findIndex(x => x.id === p.id);
+        const rankDisplay = rank < 3 ? ["🥇","🥈","🥉"][rank] : rank < 30 ? `#${rank+1}` : "";
+        const lvl = calcLevel(p.questPoints ?? 0, p.secretQuest);
+        return `<li class="opp-row" data-id="${p.id}">
+          <span class="opp-name">${p.name}</span>
+          <span class="opp-meta">Lvl ${lvl} · ⭐${p.glory ?? 0}${rankDisplay ? " · " + rankDisplay : ""}</span>
+        </li>`;
+      }).join("");
+      list.querySelectorAll(".opp-row").forEach(el => {
+        el.addEventListener("click", () => selectOpponent(el.dataset.id));
+      });
+    }
+
+    function selectOpponent(id) {
+      selectedOpponent = allPlayers.find(p => p.id === id);
+      if (!selectedOpponent) return;
+
+      document.getElementById("opponentSearch").value = selectedOpponent.name;
+      document.getElementById("opponentResults").innerHTML = "";
+
+      // Calculate glory
+      const { glory, breakdown } = calcGloryGain(selectedPlayer, selectedOpponent);
+      const oppLvl = calcLevel(selectedOpponent.questPoints ?? 0, selectedOpponent.secretQuest);
+      const oppRank = getGloryRank(selectedOpponent.id);
+
+      document.getElementById("gloryPreview").innerHTML = `
+        <div class="glory-preview-name">${selectedOpponent.name} · Lvl ${oppLvl}${oppRank ? " · Rank #" + oppRank : ""}</div>
+        <div class="glory-breakdown">${breakdown.map(b => `<span>${b}</span>`).join("")}</div>
+        <div class="glory-total">Total: <strong>+${glory} glory</strong></div>
+      `;
+      document.getElementById("gloryPreview").style.display = "block";
+      document.getElementById("awardGloryBtn").style.display = "block";
+      document.getElementById("awardGloryBtn").dataset.amount = glory;
+    }
+
+    async function awardGlory() {
+      if (!selectedPlayer || !selectedOpponent) return;
+      const amount = parseInt(document.getElementById("awardGloryBtn").dataset.amount);
+      const currentGlory = parseInt(document.getElementById("editorGlory").value) || 0;
+      const newGlory = currentGlory + amount;
+      document.getElementById("editorGlory").value = newGlory;
+
+      const msg = document.getElementById("editorMsg");
+      try {
+        await updateDoc(doc(db, "players", selectedPlayer.id), { glory: newGlory });
+        selectedPlayer.glory = newGlory;
+        // Reset opponent section
+        selectedOpponent = null;
+        document.getElementById("opponentSearch").value = "";
+        document.getElementById("gloryPreview").style.display = "none";
+        document.getElementById("awardGloryBtn").style.display = "none";
+        msg.textContent = `+${amount} glory awarded!`;
+        msg.style.color = "#ffcc44";
+        setTimeout(() => { msg.textContent = ""; }, 2500);
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#c0392b";
+      }
+    }
+
+    // ── Open/show editor ──────────────────────────────────────────────────────
     async function openPlayer(id) {
       const snap = await getDoc(doc(db, "players", id));
       selectedPlayer = { id: snap.id, ...snap.data() };
@@ -127,6 +238,12 @@
       document.getElementById("editorGlory").value = p.glory ?? 0;
       document.getElementById("editorGuild").value = p.guild || "None";
       document.getElementById("editorMsg").textContent = "";
+      // Reset glory section
+      selectedOpponent = null;
+      document.getElementById("opponentSearch").value = "";
+      document.getElementById("opponentResults").innerHTML = "";
+      document.getElementById("gloryPreview").style.display = "none";
+      document.getElementById("awardGloryBtn").style.display = "none";
       updateLevelDisplay(points, p.secretQuest);
       const sqBtn = document.getElementById("secretQuestBtn");
       if (p.secretQuest) {
@@ -154,25 +271,20 @@
       lvlEl.innerHTML = `Level <strong>${lvl}</strong> &nbsp;<span style="font-size:16px;color:#9977cc">${points} quest pts</span>${nextTxt}`;
     }
 
-    // Add quest points from button press
     async function addQuestPoints(amount) {
       if (!selectedPlayer) return;
       const currentPoints = parseInt(document.getElementById("editorPoints").value) || 0;
       const newPoints = currentPoints + amount;
       document.getElementById("editorPoints").value = newPoints;
       updateLevelDisplay(newPoints, selectedPlayer.secretQuest);
-
       const oldLvl = calcLevel(currentPoints, selectedPlayer.secretQuest);
       const newLvl = calcLevel(newPoints, selectedPlayer.secretQuest);
       const glory = parseInt(document.getElementById("editorGlory").value) || 0;
       const guild = document.getElementById("editorGuild").value;
       const msg = document.getElementById("editorMsg");
-
       try {
         await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: newPoints, glory, guild });
         selectedPlayer.questPoints = newPoints;
-        selectedPlayer.glory = glory;
-        selectedPlayer.guild = guild;
         if (newLvl > oldLvl) {
           showLevelUp(selectedPlayer.name, newLvl);
         } else {
@@ -285,10 +397,8 @@
       const guildColors = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
       tbody.innerHTML = sorted.map((p, i) => {
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
-        const guildName = p.guild && p.guild !== "None" ? p.guild : "—";
-        const guildColor = guildColors[p.guild] || "#9980bb";
         const guildHtml = p.guild && p.guild !== "None"
-          ? `<span style="color:${guildColor};font-weight:600">${guildName}</span>`
+          ? `<span style="color:${guildColors[p.guild]||"#9980bb"};font-weight:600">${p.guild}</span>`
           : `<span style="color:#555">—</span>`;
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
@@ -386,10 +496,12 @@
         selectedPlayer = null;
       });
 
-      // Quest point buttons
       document.getElementById("questBtn1").addEventListener("click", () => addQuestPoints(1));
       document.getElementById("questBtn2").addEventListener("click", () => addQuestPoints(2));
       document.getElementById("questBtn3").addEventListener("click", () => addQuestPoints(3));
+
+      document.getElementById("opponentSearch").addEventListener("input", e => renderOpponentResults(e.target.value));
+      document.getElementById("awardGloryBtn").addEventListener("click", awardGlory);
 
       document.getElementById("saveBtn").addEventListener("click", savePlayer);
       document.getElementById("secretQuestBtn").addEventListener("click", completeSecretQuest);
@@ -410,424 +522,128 @@
 
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: 'IM Fell English', Georgia, serif;
-      background: #1a0a2e;
-      color: #f0e6d3;
-      font-size: 16px;
-      min-height: 100vh;
-    }
+    body { font-family: 'IM Fell English', Georgia, serif; background: #1a0a2e; color: #f0e6d3; font-size: 16px; min-height: 100vh; }
 
     header {
       background: linear-gradient(135deg, #0d0020 0%, #1a0050 50%, #0d0020 100%);
       border-bottom: 3px solid transparent;
       border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1;
-      padding: 24px 20px 20px;
-      text-align: center;
+      padding: 24px 20px 20px; text-align: center;
     }
-    header h1 {
-      font-family: 'Cinzel Decorative', serif;
-      font-size: 32px;
-      font-weight: 700;
-      background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      letter-spacing: 2px;
-    }
-    header p {
-      font-family: 'IM Fell English', serif;
-      font-style: italic;
-      color: #c8a87a;
-      font-size: 13px;
-      margin-top: 4px;
-      letter-spacing: 1px;
-    }
+    header h1 { font-family: 'Cinzel Decorative', serif; font-size: 32px; font-weight: 700; background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: 2px; }
+    header p { font-family: 'IM Fell English', serif; font-style: italic; color: #c8a87a; font-size: 13px; margin-top: 4px; letter-spacing: 1px; }
 
-    .tabs {
-      display: flex;
-      background: #0d0020;
-      border-bottom: 3px solid transparent;
-      border-image: linear-gradient(90deg, #ff4444, #ffee00, #44cc44, #4488ff, #9944ff) 1;
-      overflow-x: auto;
-    }
-    .tab-btn {
-      flex: 1;
-      min-width: 100px;
-      padding: 15px 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 1px;
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: #9980bb;
-      white-space: nowrap;
-    }
-    .tab-btn.active {
-      background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      border-bottom: 3px solid #ffaa00;
-    }
+    .tabs { display: flex; background: #0d0020; border-bottom: 3px solid transparent; border-image: linear-gradient(90deg, #ff4444, #ffee00, #44cc44, #4488ff, #9944ff) 1; overflow-x: auto; }
+    .tab-btn { flex: 1; min-width: 100px; padding: 15px 8px; font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; letter-spacing: 1px; background: none; border: none; cursor: pointer; color: #9980bb; white-space: nowrap; }
+    .tab-btn.active { background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; border-bottom: 3px solid #ffaa00; }
 
     .tab-panel { padding: 20px; }
     .hidden { display: none !important; }
 
-    #searchInput {
-      width: 100%;
-      padding: 18px 20px;
-      font-family: 'IM Fell English', serif;
-      font-size: 20px;
-      background: #0d0020;
-      color: #f0e6d3;
-      border: 2px solid #5533aa;
-      border-radius: 8px;
-      margin-bottom: 14px;
-      outline: none;
-    }
+    #searchInput { width: 100%; padding: 18px 20px; font-family: 'IM Fell English', serif; font-size: 20px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; margin-bottom: 14px; outline: none; }
     #searchInput::placeholder { color: #6655aa; }
     #searchInput:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
 
-    .add-section {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-    .add-section input {
-      flex: 1;
-      padding: 18px 20px;
-      font-family: 'IM Fell English', serif;
-      font-size: 20px;
-      background: #0d0020;
-      color: #f0e6d3;
-      border: 2px solid #5533aa;
-      border-radius: 8px;
-      outline: none;
-    }
+    .add-section { display: flex; gap: 12px; margin-bottom: 14px; }
+    .add-section input { flex: 1; padding: 18px 20px; font-family: 'IM Fell English', serif; font-size: 20px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
     .add-section input::placeholder { color: #6655aa; }
     .add-section input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
-    .add-section button {
-      padding: 18px 28px;
-      background: linear-gradient(135deg, #44aa44, #228822);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 1px;
-    }
+    .add-section button { padding: 18px 28px; background: linear-gradient(135deg, #44aa44, #228822); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 16px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
     #addMsg { margin-bottom: 10px; font-size: 15px; min-height: 22px; font-style: italic; }
 
-    #resultsList {
-      list-style: none;
-      border: 1px solid #3a2060;
-      border-radius: 8px;
-      overflow: hidden;
-      background: #0d0020;
-    }
-    .player-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 16px 18px;
-      border-bottom: 1px solid #2a1050;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
+    #resultsList { list-style: none; border: 1px solid #3a2060; border-radius: 8px; overflow: hidden; background: #0d0020; }
+    .player-row { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid #2a1050; cursor: pointer; transition: background 0.15s; }
     .player-row:last-child { border-bottom: none; }
     .player-row:hover { background: #1f0840; }
-    .player-name {
-      font-family: 'Cinzel', serif;
-      font-weight: 600;
-      font-size: 16px;
-      color: #e8d5ff;
-    }
-    .player-meta-new {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-family: 'Cinzel', serif;
-      font-weight: 700;
-      letter-spacing: 1px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
+    .player-name { font-family: 'Cinzel', serif; font-weight: 600; font-size: 16px; color: #e8d5ff; }
+    .player-meta-new { display: flex; align-items: center; gap: 6px; font-family: 'Cinzel', serif; font-weight: 700; letter-spacing: 1px; flex-wrap: wrap; justify-content: flex-end; }
     .meta-dot { color: #4a3a6a; font-size: 16px; }
     .empty { padding: 20px; color: #6655aa; text-align: center; font-size: 15px; display: block; font-style: italic; }
 
-    /* ── Player Editor Modal ── */
-    #playerEditor {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.75);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-      padding: 20px;
-    }
-    .editor-card {
-      background: linear-gradient(160deg, #110030, #1a0040);
-      border: 2px solid #7744cc;
-      border-radius: 12px;
-      padding: 28px;
-      width: 100%;
-      max-width: 480px;
-      box-shadow: 0 0 40px rgba(120,60,255,0.4);
-      max-height: 90vh;
-      overflow-y: auto;
-    }
-    .editor-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-      border-bottom: 1px solid #3a1a70;
-      padding-bottom: 16px;
-    }
-    .editor-header h2 {
-      font-family: 'Cinzel', serif;
-      font-size: 26px;
-      background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    #closeEditor {
-      background: none;
-      border: none;
-      font-size: 30px;
-      cursor: pointer;
-      color: #9977cc;
-      line-height: 1;
-    }
+    /* ── Editor modal ── */
+    #playerEditor { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+    .editor-card { background: linear-gradient(160deg, #110030, #1a0040); border: 2px solid #7744cc; border-radius: 12px; padding: 28px; width: 100%; max-width: 480px; box-shadow: 0 0 40px rgba(120,60,255,0.4); max-height: 90vh; overflow-y: auto; }
+    .editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #3a1a70; padding-bottom: 16px; }
+    .editor-header h2 { font-family: 'Cinzel', serif; font-size: 26px; background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    #closeEditor { background: none; border: none; font-size: 30px; cursor: pointer; color: #9977cc; line-height: 1; }
 
-    #levelDisplay {
-      background: #0d0028;
-      border: 1px solid #5533aa;
-      border-radius: 8px;
-      padding: 14px 18px;
-      font-size: 20px;
-      margin-bottom: 20px;
-      color: #cc99ff;
-    }
+    #levelDisplay { background: #0d0028; border: 1px solid #5533aa; border-radius: 8px; padding: 14px 18px; font-size: 20px; margin-bottom: 20px; color: #cc99ff; }
     #levelDisplay strong { font-size: 28px; color: #ffcc44; font-family: 'Cinzel', serif; }
     .next-lvl { color: #8877aa; font-size: 14px; display: block; margin-top: 4px; }
 
+    /* ── Section dividers ── */
+    .section-label { font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600; color: #6644aa; text-transform: uppercase; letter-spacing: 2px; margin: 22px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #2a1050; }
+
     .field { margin-bottom: 18px; }
-    .field label {
-      display: block;
-      font-family: 'Cinzel', serif;
-      font-size: 14px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      color: #aa88dd;
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-    }
-    .field input, .field select {
-      width: 100%;
-      padding: 16px;
-      font-family: 'IM Fell English', serif;
-      font-size: 22px;
-      background: #0d0020;
-      color: #f0e6d3;
-      border: 2px solid #5533aa;
-      border-radius: 8px;
-      outline: none;
-    }
+    .field label { display: block; font-family: 'Cinzel', serif; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; }
+    .field input, .field select { width: 100%; padding: 16px; font-family: 'IM Fell English', serif; font-size: 22px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
     .field select option { background: #1a0040; color: #f0e6d3; }
     .field input:focus, .field select:focus { border-color: #aa66ff; }
 
-    /* ── Quest point buttons ── */
-    .quest-btn-label {
-      font-family: 'Cinzel', serif;
-      font-size: 14px;
-      font-weight: 600;
-      color: #aa88dd;
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-      margin-bottom: 10px;
-    }
-    .quest-btns {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
-    }
-    .quest-btn {
-      flex: 1;
-      padding: 16px 8px;
-      border: none;
-      border-radius: 10px;
-      font-family: 'Cinzel', serif;
-      font-size: 15px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 0.5px;
-      transition: filter 0.15s, transform 0.1s;
-      color: #fff;
-    }
+    /* ── Quest buttons ── */
+    .quest-btn-label { font-family: 'Cinzel', serif; font-size: 14px; font-weight: 600; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; }
+    .quest-btns { display: flex; gap: 10px; margin-bottom: 20px; }
+    .quest-btn { flex: 1; padding: 16px 8px; border: none; border-radius: 10px; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 700; cursor: pointer; color: #fff; transition: filter 0.15s, transform 0.1s; }
     .quest-btn:active { transform: scale(0.96); }
     .quest-btn:hover { filter: brightness(1.15); }
-    #questBtn1 {
-      background: linear-gradient(135deg, #2255aa, #3377cc);
-      box-shadow: 0 2px 10px rgba(50,100,200,0.4);
-    }
-    #questBtn2 {
-      background: linear-gradient(135deg, #aa5500, #cc7722);
-      box-shadow: 0 2px 10px rgba(180,100,20,0.4);
-    }
-    #questBtn3 {
-      background: linear-gradient(135deg, #880088, #bb22bb);
-      box-shadow: 0 2px 10px rgba(150,30,150,0.4);
-    }
+    #questBtn1 { background: linear-gradient(135deg, #2255aa, #3377cc); box-shadow: 0 2px 10px rgba(50,100,200,0.4); }
+    #questBtn2 { background: linear-gradient(135deg, #aa5500, #cc7722); box-shadow: 0 2px 10px rgba(180,100,20,0.4); }
+    #questBtn3 { background: linear-gradient(135deg, #880088, #bb22bb); box-shadow: 0 2px 10px rgba(150,30,150,0.4); }
     .quest-btn .btn-tier { font-size: 11px; opacity: 0.85; display: block; margin-bottom: 4px; letter-spacing: 1px; }
     .quest-btn .btn-pts { font-size: 22px; }
 
-    #secretQuestBtn {
-      width: 100%;
-      padding: 16px;
-      background: linear-gradient(135deg, #6c3483, #9b59b6);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 17px;
-      font-weight: 600;
-      cursor: pointer;
-      margin-bottom: 12px;
-      letter-spacing: 0.5px;
-      box-shadow: 0 2px 12px rgba(150,50,200,0.4);
-    }
+    /* ── Glory section ── */
+    .glory-manual-row { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+    .glory-manual-row input { flex: 1; padding: 14px; font-family: 'IM Fell English', serif; font-size: 22px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
+    .glory-manual-row input:focus { border-color: #aa66ff; }
+    .glory-manual-label { font-family: 'Cinzel', serif; font-size: 11px; color: #7755aa; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+
+    /* opponent search */
+    .opp-search-wrap { position: relative; margin-bottom: 10px; }
+    #opponentSearch { width: 100%; padding: 14px 16px; font-family: 'IM Fell English', serif; font-size: 18px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
+    #opponentSearch::placeholder { color: #6655aa; }
+    #opponentSearch:focus { border-color: #ffaa44; box-shadow: 0 0 12px rgba(255,160,50,0.25); }
+    #opponentResults { list-style: none; background: #0d0020; border: 1px solid #3a2060; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+    .opp-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid #2a1050; cursor: pointer; transition: background 0.1s; }
+    .opp-row:last-child { border-bottom: none; }
+    .opp-row:hover { background: #1f0840; }
+    .opp-name { font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600; color: #e8d5ff; }
+    .opp-meta { font-size: 13px; color: #9980bb; }
+    .opp-empty { padding: 12px; color: #6655aa; text-align: center; font-style: italic; font-size: 14px; }
+
+    /* glory preview */
+    #gloryPreview { background: #0d0028; border: 1px solid #ffaa33; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; display: none; }
+    .glory-preview-name { font-family: 'Cinzel', serif; font-size: 15px; color: #ffcc88; font-weight: 600; margin-bottom: 8px; }
+    .glory-breakdown { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .glory-breakdown span { font-size: 13px; color: #aa99cc; font-style: italic; }
+    .glory-breakdown span::before { content: "✦ "; color: #ffaa33; }
+    .glory-total { font-family: 'Cinzel', serif; font-size: 18px; color: #ffee44; }
+    .glory-total strong { font-size: 22px; }
+
+    #awardGloryBtn { width: 100%; padding: 16px; background: linear-gradient(135deg, #aa7700, #ddaa00); color: #1a0a00; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; cursor: pointer; margin-bottom: 14px; letter-spacing: 1px; display: none; box-shadow: 0 2px 14px rgba(200,150,0,0.4); }
+    #awardGloryBtn:hover { filter: brightness(1.1); }
+
+    #secretQuestBtn { width: 100%; padding: 16px; background: linear-gradient(135deg, #6c3483, #9b59b6); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 17px; font-weight: 600; cursor: pointer; margin-bottom: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 12px rgba(150,50,200,0.4); }
     #secretQuestBtn.sq-done { background: #3a3a3a; box-shadow: none; cursor: default; }
 
-    #saveBtn {
-      width: 100%;
-      padding: 18px;
-      background: linear-gradient(135deg, #1a5fa8, #2980b9);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 20px;
-      font-weight: 700;
-      cursor: pointer;
-      margin-bottom: 12px;
-      letter-spacing: 1px;
-      box-shadow: 0 2px 12px rgba(40,120,200,0.4);
-    }
-
-    #deleteBtn {
-      width: 100%;
-      padding: 15px;
-      background: transparent;
-      color: #ff6655;
-      border: 2px solid #aa3322;
-      border-radius: 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 17px;
-      font-weight: 600;
-      cursor: pointer;
-      letter-spacing: 0.5px;
-    }
+    #saveBtn { width: 100%; padding: 18px; background: linear-gradient(135deg, #1a5fa8, #2980b9); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 20px; font-weight: 700; cursor: pointer; margin-bottom: 12px; letter-spacing: 1px; box-shadow: 0 2px 12px rgba(40,120,200,0.4); }
+    #deleteBtn { width: 100%; padding: 15px; background: transparent; color: #ff6655; border: 2px solid #aa3322; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 17px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; }
     #deleteBtn:hover { background: rgba(180,50,40,0.15); }
-
     #editorMsg { margin-top: 12px; font-size: 17px; min-height: 24px; text-align: center; font-style: italic; }
 
-    /* ── Level up overlay ── */
-    #levelUpOverlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.8);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 200;
-    }
-    .levelup-card {
-      background: linear-gradient(160deg, #0d0030, #1a0050);
-      border: 3px solid transparent;
-      border-radius: 16px;
-      padding: 40px 32px;
-      text-align: center;
-      max-width: 340px;
-      width: 90%;
-      box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5);
-      position: relative;
-    }
-    .levelup-card::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: 14px;
-      padding: 3px;
-      background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
-      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-      -webkit-mask-composite: xor;
-      mask-composite: exclude;
-      pointer-events: none;
-    }
+    /* ── Level up ── */
+    #levelUpOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
+    .levelup-card { background: linear-gradient(160deg, #0d0030, #1a0050); border: 3px solid transparent; border-radius: 16px; padding: 40px 32px; text-align: center; max-width: 340px; width: 90%; box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5); position: relative; }
+    .levelup-card::before { content: ''; position: absolute; inset: 0; border-radius: 14px; padding: 3px; background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
     .levelup-card .lvl-icon { font-size: 64px; margin-bottom: 12px; }
-    .levelup-card h2 {
-      font-family: 'Cinzel Decorative', serif;
-      font-size: 28px;
-      background: linear-gradient(90deg, #ffcc00, #ff9900, #ffee44);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin-bottom: 12px;
-    }
-    #levelUpText {
-      font-family: 'IM Fell English', serif;
-      font-size: 18px;
-      color: #e8d5ff;
-      margin-bottom: 28px;
-      font-style: italic;
-    }
-    #levelUpClose {
-      padding: 13px 36px;
-      background: linear-gradient(135deg, #cc9900, #ffcc00);
-      color: #1a0a00;
-      border: none;
-      border-radius: 8px;
-      font-family: 'Cinzel', serif;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 1px;
-    }
+    .levelup-card h2 { font-family: 'Cinzel Decorative', serif; font-size: 28px; background: linear-gradient(90deg, #ffcc00, #ff9900, #ffee44); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 12px; }
+    #levelUpText { font-family: 'IM Fell English', serif; font-size: 18px; color: #e8d5ff; margin-bottom: 28px; font-style: italic; }
+    #levelUpClose { padding: 13px 36px; background: linear-gradient(135deg, #cc9900, #ffcc00); color: #1a0a00; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 16px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
 
     /* ── Tables ── */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #0d0020;
-      border-radius: 8px;
-      overflow: hidden;
-      border: 1px solid #3a1a70;
-    }
-    thead {
-      background: linear-gradient(90deg, #1a0050, #2d0060);
-      border-bottom: 2px solid transparent;
-      border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1;
-    }
-    th {
-      padding: 14px;
-      text-align: left;
-      font-family: 'Cinzel', serif;
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-      color: #cc99ff;
-    }
+    table { width: 100%; border-collapse: collapse; background: #0d0020; border-radius: 8px; overflow: hidden; border: 1px solid #3a1a70; }
+    thead { background: linear-gradient(90deg, #1a0050, #2d0060); border-bottom: 2px solid transparent; border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1; }
+    th { padding: 14px; text-align: left; font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #cc99ff; }
     td { padding: 13px 14px; font-size: 15px; border-bottom: 1px solid #1e0840; color: #e8d5ff; }
     td small { font-size: 12px; color: #7755aa; }
     tr:last-child td { border-bottom: none; }
@@ -838,133 +654,25 @@
     .rank-2 td { background: rgba(180,180,200,0.05); }
     .rank-3 td { background: rgba(200,120,60,0.07); }
 
-    /* ── Guild tabs ── */
     #guildTabBar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-    .guild-tab-btn {
-      padding: 8px 16px;
-      border: 2px solid #5533aa;
-      border-radius: 20px;
-      background: transparent;
-      color: #aa88dd;
-      font-family: 'Cinzel', serif;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      letter-spacing: 0.5px;
-      transition: all 0.2s;
-    }
-    .guild-tab-btn.active {
-      background: linear-gradient(135deg, #5533aa, #7744cc);
-      color: #fff;
-      border-color: #9966ff;
-      box-shadow: 0 2px 10px rgba(100,60,200,0.4);
-    }
-    #guildHeader {
-      font-family: 'Cinzel Decorative', serif;
-      font-size: 20px;
-      margin-bottom: 14px;
-      background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa, #66aaff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
+    .guild-tab-btn { padding: 8px 16px; border: 2px solid #5533aa; border-radius: 20px; background: transparent; color: #aa88dd; font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; transition: all 0.2s; }
+    .guild-tab-btn.active { background: linear-gradient(135deg, #5533aa, #7744cc); color: #fff; border-color: #9966ff; box-shadow: 0 2px 10px rgba(100,60,200,0.4); }
+    #guildHeader { font-family: 'Cinzel Decorative', serif; font-size: 20px; margin-bottom: 14px; background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa, #66aaff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
 
     /* ── Login ── */
-    #loginScreen {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: linear-gradient(160deg, #0d0020 0%, #1a0050 50%, #0d0020 100%);
-      padding: 24px;
-    }
-    .login-card {
-      background: linear-gradient(160deg, #110030, #1a0040);
-      border: 2px solid #7744cc;
-      border-radius: 16px;
-      padding: 40px 32px;
-      width: 100%;
-      max-width: 400px;
-      text-align: center;
-      box-shadow: 0 0 60px rgba(120,60,255,0.35);
-      position: relative;
-    }
-    .login-card::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: 14px;
-      padding: 2px;
-      background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff);
-      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-      -webkit-mask-composite: xor;
-      mask-composite: exclude;
-      pointer-events: none;
-    }
+    #loginScreen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #0d0020 0%, #1a0050 50%, #0d0020 100%); padding: 24px; }
+    .login-card { background: linear-gradient(160deg, #110030, #1a0040); border: 2px solid #7744cc; border-radius: 16px; padding: 40px 32px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 0 60px rgba(120,60,255,0.35); position: relative; }
+    .login-card::before { content: ""; position: absolute; inset: 0; border-radius: 14px; padding: 2px; background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
     .login-icon { font-size: 56px; margin-bottom: 12px; }
-    .login-title {
-      font-family: "Cinzel Decorative", serif;
-      font-size: 26px;
-      background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin-bottom: 4px;
-    }
-    .login-sub {
-      font-family: "IM Fell English", serif;
-      font-style: italic;
-      color: #c8a87a;
-      font-size: 13px;
-      margin-bottom: 28px;
-      letter-spacing: 1px;
-    }
-    .login-prompt {
-      font-family: "IM Fell English", serif;
-      font-size: 16px;
-      color: #aa88dd;
-      margin-bottom: 16px;
-      font-style: italic;
-    }
-    .login-input {
-      width: 100%;
-      padding: 16px 18px;
-      font-family: "IM Fell English", serif;
-      font-size: 22px;
-      background: #0d0020;
-      color: #f0e6d3;
-      border: 2px solid #5533aa;
-      border-radius: 8px;
-      outline: none;
-      text-align: center;
-      margin-bottom: 14px;
-    }
+    .login-title { font-family: "Cinzel Decorative", serif; font-size: 26px; background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 4px; }
+    .login-sub { font-family: "IM Fell English", serif; font-style: italic; color: #c8a87a; font-size: 13px; margin-bottom: 28px; letter-spacing: 1px; }
+    .login-prompt { font-family: "IM Fell English", serif; font-size: 16px; color: #aa88dd; margin-bottom: 16px; font-style: italic; }
+    .login-input { width: 100%; padding: 16px 18px; font-family: "IM Fell English", serif; font-size: 22px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; text-align: center; margin-bottom: 14px; }
     .login-input::placeholder { color: #6655aa; }
     .login-input:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
-    .login-btn {
-      width: 100%;
-      padding: 16px;
-      background: linear-gradient(135deg, #5533aa, #7744cc);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-family: "Cinzel", serif;
-      font-size: 18px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 1px;
-      box-shadow: 0 2px 14px rgba(100,60,200,0.5);
-      margin-bottom: 12px;
-    }
+    .login-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #5533aa, #7744cc); color: #fff; border: none; border-radius: 8px; font-family: "Cinzel", serif; font-size: 18px; font-weight: 700; cursor: pointer; letter-spacing: 1px; box-shadow: 0 2px 14px rgba(100,60,200,0.5); margin-bottom: 12px; }
     .login-btn:hover { background: linear-gradient(135deg, #6644bb, #8855dd); }
-    .login-error {
-      font-family: "IM Fell English", serif;
-      font-style: italic;
-      color: #ff6655;
-      font-size: 15px;
-      min-height: 22px;
-    }
+    .login-error { font-family: "IM Fell English", serif; font-style: italic; color: #ff6655; font-size: 15px; min-height: 22px; }
 
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0d0020; }
@@ -999,7 +707,6 @@
   <button class="tab-btn" data-tab="guild">Guild Board</button>
 </div>
 
-<!-- Search Tab -->
 <div class="tab-panel" id="tab-search">
   <input type="text" id="searchInput" placeholder="Search adventurer name…" autocomplete="off" autocorrect="off" spellcheck="false">
   <div class="add-section">
@@ -1010,29 +717,19 @@
   <ul id="resultsList"></ul>
 </div>
 
-<!-- Glory Leaderboard -->
 <div class="tab-panel hidden" id="tab-glory">
   <table>
-    <thead>
-      <tr><th>#</th><th>Adventurer</th><th>Guild</th><th style="text-align:right">Glory</th></tr>
-    </thead>
-    <tbody id="gloryBody">
-      <tr><td colspan="4" class="empty">Loading…</td></tr>
-    </tbody>
+    <thead><tr><th>#</th><th>Adventurer</th><th>Guild</th><th style="text-align:right">Glory</th></tr></thead>
+    <tbody id="gloryBody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
   </table>
 </div>
 
-<!-- Guild Leaderboard -->
 <div class="tab-panel hidden" id="tab-guild">
   <div id="guildTabBar"></div>
   <div id="guildHeader"></div>
   <table>
-    <thead>
-      <tr><th>#</th><th>Adventurer</th><th style="text-align:right">Quest Pts</th></tr>
-    </thead>
-    <tbody id="guildBody">
-      <tr><td colspan="3" class="empty">Loading…</td></tr>
-    </tbody>
+    <thead><tr><th>#</th><th>Adventurer</th><th style="text-align:right">Quest Pts</th></tr></thead>
+    <tbody id="guildBody"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
   </table>
 </div>
 
@@ -1046,33 +743,38 @@
 
     <div id="levelDisplay">Level <strong>1</strong></div>
 
-    <!-- Quest point quick-add buttons -->
-    <div class="quest-btn-label">Add Quest Points</div>
+    <!-- ── Quest Points ── -->
+    <div class="section-label">Quest Points</div>
+    <div class="quest-btn-label">Quick Add</div>
     <div class="quest-btns">
-      <button class="quest-btn" id="questBtn1">
-        <span class="btn-tier">Tier 1</span>
-        <span class="btn-pts">+1 pt</span>
-      </button>
-      <button class="quest-btn" id="questBtn2">
-        <span class="btn-tier">Tier 2</span>
-        <span class="btn-pts">+2 pts</span>
-      </button>
-      <button class="quest-btn" id="questBtn3">
-        <span class="btn-tier">Tier 3</span>
-        <span class="btn-pts">+3 pts</span>
-      </button>
+      <button class="quest-btn" id="questBtn1"><span class="btn-tier">Tier 1</span><span class="btn-pts">+1 pt</span></button>
+      <button class="quest-btn" id="questBtn2"><span class="btn-tier">Tier 2</span><span class="btn-pts">+2 pts</span></button>
+      <button class="quest-btn" id="questBtn3"><span class="btn-tier">Tier 3</span><span class="btn-pts">+3 pts</span></button>
     </div>
-
     <div class="field">
       <label>Total Quest Points</label>
       <input type="number" id="editorPoints" min="0" placeholder="0">
     </div>
-    <div class="field">
-      <label>Glory</label>
+
+    <!-- ── Glory ── -->
+    <div class="section-label">Glory</div>
+
+    <div class="quest-btn-label">Award Battle Victory</div>
+    <div class="opp-search-wrap">
+      <input type="text" id="opponentSearch" placeholder="Search opponent name…" autocomplete="off" autocorrect="off" spellcheck="false">
+    </div>
+    <ul id="opponentResults"></ul>
+    <div id="gloryPreview"></div>
+    <button id="awardGloryBtn">⚔️ Award Glory</button>
+
+    <div class="glory-manual-label">Manual Adjust</div>
+    <div class="glory-manual-row">
       <input type="number" id="editorGlory" min="0" placeholder="0">
     </div>
+
+    <!-- ── Guild ── -->
+    <div class="section-label">Guild</div>
     <div class="field">
-      <label>Guild</label>
       <select id="editorGuild">
         <option value="None">None</option>
         <option value="Paladins">Paladins</option>
@@ -1082,14 +784,15 @@
         <option value="Inventors">Inventors</option>
       </select>
     </div>
+
+    <div class="section-label">Other</div>
     <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
-    <button id="saveBtn">Save</button>
+    <button id="saveBtn">Save All</button>
     <button id="deleteBtn">🗑 Delete Adventurer</button>
     <div id="editorMsg"></div>
   </div>
 </div>
 
-<!-- Level Up Notification -->
 <div id="levelUpOverlay" class="hidden">
   <div class="levelup-card">
     <div class="lvl-icon">⚔️</div>
@@ -1099,6 +802,6 @@
   </div>
 </div>
 
-</div><!-- end mainApp -->
+</div>
 </body>
 </html>
