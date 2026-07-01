@@ -39,7 +39,6 @@
       return LEVEL_THRESHOLDS[level + 1];
     }
 
-    // Returns the glory rank (1-based) of a player, or null if not in top 30
     function getGloryRank(playerId) {
       const sorted = [...allPlayers].sort((a, b) => (b.glory ?? 0) - (a.glory ?? 0));
       const idx = sorted.findIndex(p => p.id === playerId);
@@ -47,27 +46,17 @@
       return idx + 1;
     }
 
-    // Calculate glory to award for a win against opponent
     function calcGloryGain(winner, opponent) {
       const winnerLvl = calcLevel(winner.questPoints ?? 0, winner.secretQuest);
       const oppLvl = calcLevel(opponent.questPoints ?? 0, opponent.secretQuest);
       const oppRank = getGloryRank(opponent.id);
 
-      let glory = 1; // base win
+      let glory = 1;
       const breakdown = ["+1 base win"];
 
-      if (oppLvl > winnerLvl) {
-        glory += 1;
-        breakdown.push("+1 higher level opponent");
-      }
-      if (oppRank !== null && oppRank <= 30) {
-        glory += 1;
-        breakdown.push("+1 leaderboard opponent (top 30)");
-      }
-      if (oppRank !== null && oppRank <= 3) {
-        glory += 1;
-        breakdown.push("+1 top 3 opponent");
-      }
+      if (oppLvl > winnerLvl) { glory += 1; breakdown.push("+1 higher level opponent"); }
+      if (oppRank !== null && oppRank <= 30) { glory += 1; breakdown.push("+1 leaderboard opponent (top 30)"); }
+      if (oppRank !== null && oppRank <= 3) { glory += 1; breakdown.push("+1 top 3 opponent"); }
 
       return { glory, breakdown };
     }
@@ -80,19 +69,17 @@
     let selectedPlayer = null;
     let activeTab = "search";
     let activeGuildTab = null;
-    let selectedOpponent = null; // for glory battle search
+    let selectedOpponent = null;
 
     onSnapshot(query(playersCol, orderBy("name")), (snap) => {
       allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (activeTab === "glory")  renderGloryLeaderboard();
       if (activeTab === "guild")  renderGuildLeaderboard();
       if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
-      // refresh opponent search if open
       const oppInput = document.getElementById("opponentSearch");
       if (oppInput && oppInput.value) renderOpponentResults(oppInput.value);
     });
 
-    // ── Fuzzy search ──────────────────────────────────────────────────────────
     function score(name, q) {
       name = name.toLowerCase(); q = q.toLowerCase();
       if (name === q) return 1000;
@@ -105,7 +92,7 @@
 
     function fuzzySearch(q, excludeId) {
       const pool = excludeId ? allPlayers.filter(p => p.id !== excludeId) : allPlayers;
-      if (!q.trim()) return pool.sort((a, b) => (b.questPoints ?? 0) - (a.questPoints ?? 0)).slice(0, 40);
+      if (!q.trim()) return [...pool].sort((a, b) => (b.questPoints ?? 0) - (a.questPoints ?? 0)).slice(0, 40);
       return pool
         .map(p => ({ ...p, _score: score(p.name, q) }))
         .filter(p => p._score > 20)
@@ -113,7 +100,6 @@
         .slice(0, 10);
     }
 
-    // ── Main player search ────────────────────────────────────────────────────
     function renderResults(q) {
       const list = document.getElementById("resultsList");
       const results = fuzzySearch(q, null);
@@ -152,7 +138,6 @@
       });
     }
 
-    // ── Opponent search (inside glory section) ────────────────────────────────
     function renderOpponentResults(q) {
       const list = document.getElementById("opponentResults");
       if (!q.trim()) { list.innerHTML = ""; return; }
@@ -179,15 +164,11 @@
     function selectOpponent(id) {
       selectedOpponent = allPlayers.find(p => p.id === id);
       if (!selectedOpponent) return;
-
       document.getElementById("opponentSearch").value = selectedOpponent.name;
       document.getElementById("opponentResults").innerHTML = "";
-
-      // Calculate glory
       const { glory, breakdown } = calcGloryGain(selectedPlayer, selectedOpponent);
       const oppLvl = calcLevel(selectedOpponent.questPoints ?? 0, selectedOpponent.secretQuest);
       const oppRank = getGloryRank(selectedOpponent.id);
-
       document.getElementById("gloryPreview").innerHTML = `
         <div class="glory-preview-name">${selectedOpponent.name} · Lvl ${oppLvl}${oppRank ? " · Rank #" + oppRank : ""}</div>
         <div class="glory-breakdown">${breakdown.map(b => `<span>${b}</span>`).join("")}</div>
@@ -204,12 +185,10 @@
       const currentGlory = parseInt(document.getElementById("editorGlory").value) || 0;
       const newGlory = currentGlory + amount;
       document.getElementById("editorGlory").value = newGlory;
-
       const msg = document.getElementById("editorMsg");
       try {
         await updateDoc(doc(db, "players", selectedPlayer.id), { glory: newGlory });
         selectedPlayer.glory = newGlory;
-        // Reset opponent section
         selectedOpponent = null;
         document.getElementById("opponentSearch").value = "";
         document.getElementById("gloryPreview").style.display = "none";
@@ -223,7 +202,6 @@
       }
     }
 
-    // ── Open/show editor ──────────────────────────────────────────────────────
     async function openPlayer(id) {
       const snap = await getDoc(doc(db, "players", id));
       selectedPlayer = { id: snap.id, ...snap.data() };
@@ -233,18 +211,26 @@
     function showEditor() {
       const p = selectedPlayer;
       const points = p.questPoints ?? 0;
+      const lvl = calcLevel(points, p.secretQuest);
+      const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
+
       document.getElementById("editorName").textContent = p.name;
+      document.getElementById("editorNameLvl").textContent = `Lvl ${lvl}`;
+      document.getElementById("editorNameLvl").style.color = lvlColors[lvl] || "#c8b89a";
+      document.getElementById("editorNamePts").textContent = `${points} pts`;
       document.getElementById("editorPoints").value = points;
       document.getElementById("editorGlory").value = p.glory ?? 0;
       document.getElementById("editorGuild").value = p.guild || "None";
       document.getElementById("editorMsg").textContent = "";
-      // Reset glory section
+
       selectedOpponent = null;
       document.getElementById("opponentSearch").value = "";
       document.getElementById("opponentResults").innerHTML = "";
       document.getElementById("gloryPreview").style.display = "none";
       document.getElementById("awardGloryBtn").style.display = "none";
+
       updateLevelDisplay(points, p.secretQuest);
+
       const sqBtn = document.getElementById("secretQuestBtn");
       if (p.secretQuest) {
         sqBtn.textContent = "✔ Secret Quest Complete";
@@ -255,12 +241,16 @@
         sqBtn.classList.remove("sq-done");
         sqBtn.disabled = false;
       }
+
+      // Switch to first tab
+      switchEditorTab("quest");
       document.getElementById("playerEditor").classList.remove("hidden");
     }
 
     function updateLevelDisplay(points, secretQuest) {
       const lvl = calcLevel(points, secretQuest);
       const next = pointsForNextLevel(lvl);
+      const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
       const lvlEl = document.getElementById("levelDisplay");
       let nextTxt = "";
       if (lvl < 4) {
@@ -268,7 +258,19 @@
       } else if (lvl === 4 && !secretQuest) {
         nextTxt = ` <span class="next-lvl">(Complete secret quest for Lvl 5)</span>`;
       }
-      lvlEl.innerHTML = `Level <strong>${lvl}</strong> &nbsp;<span style="font-size:16px;color:#9977cc">${points} quest pts</span>${nextTxt}`;
+      lvlEl.innerHTML = `Level <strong style="color:${lvlColors[lvl]}">${lvl}</strong> &nbsp;<span style="font-size:16px;color:#9977cc">${points} quest pts</span>${nextTxt}`;
+
+      // Also update header badge
+      if (selectedPlayer) {
+        document.getElementById("editorNameLvl").textContent = `Lvl ${lvl}`;
+        document.getElementById("editorNameLvl").style.color = lvlColors[lvl] || "#c8b89a";
+        document.getElementById("editorNamePts").textContent = `${points} pts`;
+      }
+    }
+
+    function switchEditorTab(tab) {
+      document.querySelectorAll(".editor-tab-btn").forEach(b => b.classList.toggle("active", b.dataset.etab === tab));
+      document.querySelectorAll(".editor-tab-panel").forEach(p => p.classList.toggle("hidden", p.dataset.epanel !== tab));
     }
 
     async function addQuestPoints(amount) {
@@ -447,7 +449,7 @@
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
-          <td>${p.name}<br><small>Lvl ${lvl}</small></td>
+          <td>${p.name}</td>
           <td class="num">${points}pts</td>
         </tr>`;
       }).join("");
@@ -496,6 +498,10 @@
         selectedPlayer = null;
       });
 
+      document.querySelectorAll(".editor-tab-btn").forEach(btn =>
+        btn.addEventListener("click", () => switchEditorTab(btn.dataset.etab))
+      );
+
       document.getElementById("questBtn1").addEventListener("click", () => addQuestPoints(1));
       document.getElementById("questBtn2").addEventListener("click", () => addQuestPoints(2));
       document.getElementById("questBtn3").addEventListener("click", () => addQuestPoints(3));
@@ -524,12 +530,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'IM Fell English', Georgia, serif; background: #1a0a2e; color: #f0e6d3; font-size: 16px; min-height: 100vh; }
 
-    header {
-      background: linear-gradient(135deg, #0d0020 0%, #1a0050 50%, #0d0020 100%);
-      border-bottom: 3px solid transparent;
-      border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1;
-      padding: 24px 20px 20px; text-align: center;
-    }
+    header { background: linear-gradient(135deg, #0d0020 0%, #1a0050 50%, #0d0020 100%); border-bottom: 3px solid transparent; border-image: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) 1; padding: 24px 20px 20px; text-align: center; }
     header h1 { font-family: 'Cinzel Decorative', serif; font-size: 32px; font-weight: 700; background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: 2px; }
     header p { font-family: 'IM Fell English', serif; font-style: italic; color: #c8a87a; font-size: 13px; margin-top: 4px; letter-spacing: 1px; }
 
@@ -562,26 +563,97 @@
 
     /* ── Editor modal ── */
     #playerEditor { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
-    .editor-card { background: linear-gradient(160deg, #110030, #1a0040); border: 2px solid #7744cc; border-radius: 12px; padding: 28px; width: 100%; max-width: 480px; box-shadow: 0 0 40px rgba(120,60,255,0.4); max-height: 90vh; overflow-y: auto; }
-    .editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #3a1a70; padding-bottom: 16px; }
-    .editor-header h2 { font-family: 'Cinzel', serif; font-size: 26px; background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-    #closeEditor { background: none; border: none; font-size: 30px; cursor: pointer; color: #9977cc; line-height: 1; }
+    .editor-card { background: linear-gradient(160deg, #110030, #1a0040); border: 2px solid #7744cc; border-radius: 12px; padding: 0; width: 100%; max-width: 480px; box-shadow: 0 0 40px rgba(120,60,255,0.4); max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; }
+
+    /* ── Editor header ── */
+    .editor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid #3a1a70;
+      background: linear-gradient(135deg, #0d0028, #160040);
+      border-radius: 10px 10px 0 0;
+      flex-shrink: 0;
+    }
+    .editor-header-left { display: flex; flex-direction: column; gap: 4px; }
+    .editor-header h2 { font-family: 'Cinzel', serif; font-size: 24px; background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .editor-header-stats { display: flex; gap: 12px; align-items: center; }
+    .editor-lvl-badge { font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; }
+    .editor-pts-badge { font-family: 'Cinzel', serif; font-size: 14px; color: #9977cc; }
+    #closeEditor { background: none; border: none; font-size: 30px; cursor: pointer; color: #9977cc; line-height: 1; flex-shrink: 0; }
+
+    /* ── Inner editor tabs ── */
+    .editor-tabs {
+      display: flex;
+      flex-shrink: 0;
+      border-bottom: 2px solid #2a1050;
+    }
+    .editor-tab-btn {
+      flex: 1;
+      padding: 13px 6px;
+      font-family: 'Cinzel', serif;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      border: none;
+      cursor: pointer;
+      background: #0d0022;
+      color: #6644aa;
+      text-transform: uppercase;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    /* Per-tab accent colours */
+    .editor-tab-btn[data-etab="quest"]  { border-top: 3px solid #ddaa00; }
+    .editor-tab-btn[data-etab="glory"]  { border-top: 3px solid #2255aa; }
+    .editor-tab-btn[data-etab="guild"]  { border-top: 3px solid var(--guild-color, #44aa44); }
+    .editor-tab-btn[data-etab="other"]  { border-top: 3px solid #9b59b6; }
+
+    .editor-tab-btn[data-etab="quest"].active  { background: #221a00; color: #ffcc44; border-bottom: 3px solid #ddaa00; }
+    .editor-tab-btn[data-etab="glory"].active  { background: #0d1a35; color: #66aaff; border-bottom: 3px solid #3377cc; }
+    .editor-tab-btn[data-etab="guild"].active  { background: #0d2210; color: var(--guild-color, #66dd66); border-bottom: 3px solid var(--guild-color, #44aa44); }
+    .editor-tab-btn[data-etab="other"].active  { background: #1a0d2a; color: #cc88ff; border-bottom: 3px solid #9b59b6; }
+
+    .editor-tab-icon { font-size: 18px; display: block; margin-bottom: 3px; }
+
+    /* ── Editor panels ── */
+    .editor-tab-panel { padding: 22px 24px; flex: 1; }
+
+    /* Panel accent borders */
+    .editor-tab-panel[data-epanel="quest"] { border-left: 3px solid #ddaa00; }
+    .editor-tab-panel[data-epanel="glory"] { border-left: 3px solid #2255aa; }
+    .editor-tab-panel[data-epanel="guild"] { border-left: 3px solid var(--guild-color, #44aa44); }
+    .editor-tab-panel[data-epanel="other"] { border-left: 3px solid #9b59b6; }
+
+    /* Panel section titles */
+    .panel-title {
+      font-family: 'Cinzel Decorative', serif;
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 18px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid;
+      letter-spacing: 1px;
+    }
+    .panel-title.quest-color  { color: #ffcc44; border-color: #ddaa00; }
+    .panel-title.glory-color  { color: #66aaff; border-color: #2255aa; }
+    .panel-title.guild-color  { color: var(--guild-color, #66dd66); border-color: var(--guild-color, #44aa44); }
+    .panel-title.other-color  { color: #cc88ff; border-color: #9b59b6; }
 
     #levelDisplay { background: #0d0028; border: 1px solid #5533aa; border-radius: 8px; padding: 14px 18px; font-size: 20px; margin-bottom: 20px; color: #cc99ff; }
-    #levelDisplay strong { font-size: 28px; color: #ffcc44; font-family: 'Cinzel', serif; }
+    #levelDisplay strong { font-size: 28px; font-family: 'Cinzel', serif; }
     .next-lvl { color: #8877aa; font-size: 14px; display: block; margin-top: 4px; }
 
-    /* ── Section dividers ── */
-    .section-label { font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600; color: #6644aa; text-transform: uppercase; letter-spacing: 2px; margin: 22px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #2a1050; }
-
     .field { margin-bottom: 18px; }
-    .field label { display: block; font-family: 'Cinzel', serif; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; }
+    .field label { display: block; font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; }
     .field input, .field select { width: 100%; padding: 16px; font-family: 'IM Fell English', serif; font-size: 22px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
     .field select option { background: #1a0040; color: #f0e6d3; }
     .field input:focus, .field select:focus { border-color: #aa66ff; }
 
     /* ── Quest buttons ── */
-    .quest-btn-label { font-family: 'Cinzel', serif; font-size: 14px; font-weight: 600; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; }
+    .quest-btn-label { font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; color: #aa8833; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; }
     .quest-btns { display: flex; gap: 10px; margin-bottom: 20px; }
     .quest-btn { flex: 1; padding: 16px 8px; border: none; border-radius: 10px; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 700; cursor: pointer; color: #fff; transition: filter 0.15s, transform 0.1s; }
     .quest-btn:active { transform: scale(0.96); }
@@ -596,9 +668,8 @@
     .glory-manual-row { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
     .glory-manual-row input { flex: 1; padding: 14px; font-family: 'IM Fell English', serif; font-size: 22px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
     .glory-manual-row input:focus { border-color: #aa66ff; }
-    .glory-manual-label { font-family: 'Cinzel', serif; font-size: 11px; color: #7755aa; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+    .glory-manual-label { font-family: 'Cinzel', serif; font-size: 12px; color: #6688bb; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
 
-    /* opponent search */
     .opp-search-wrap { position: relative; margin-bottom: 10px; }
     #opponentSearch { width: 100%; padding: 14px 16px; font-family: 'IM Fell English', serif; font-size: 18px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; outline: none; }
     #opponentSearch::placeholder { color: #6655aa; }
@@ -611,7 +682,6 @@
     .opp-meta { font-size: 13px; color: #9980bb; }
     .opp-empty { padding: 12px; color: #6655aa; text-align: center; font-style: italic; font-size: 14px; }
 
-    /* glory preview */
     #gloryPreview { background: #0d0028; border: 1px solid #ffaa33; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; display: none; }
     .glory-preview-name { font-family: 'Cinzel', serif; font-size: 15px; color: #ffcc88; font-weight: 600; margin-bottom: 8px; }
     .glory-breakdown { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
@@ -736,60 +806,94 @@
 <!-- Player Editor Modal -->
 <div id="playerEditor" class="hidden">
   <div class="editor-card">
+
+    <!-- Header with name + live stats -->
     <div class="editor-header">
-      <h2 id="editorName">Adventurer</h2>
+      <div class="editor-header-left">
+        <h2 id="editorName">Adventurer</h2>
+        <div class="editor-header-stats">
+          <span class="editor-lvl-badge" id="editorNameLvl">Lvl 1</span>
+          <span style="color:#3a2060">·</span>
+          <span class="editor-pts-badge" id="editorNamePts">0 pts</span>
+        </div>
+      </div>
       <button id="closeEditor">✕</button>
     </div>
 
-    <div id="levelDisplay">Level <strong>1</strong></div>
-
-    <!-- ── Quest Points ── -->
-    <div class="section-label">Quest Points</div>
-    <div class="quest-btn-label">Quick Add</div>
-    <div class="quest-btns">
-      <button class="quest-btn" id="questBtn1"><span class="btn-tier">Tier 1</span><span class="btn-pts">+1 pt</span></button>
-      <button class="quest-btn" id="questBtn2"><span class="btn-tier">Tier 2</span><span class="btn-pts">+2 pts</span></button>
-      <button class="quest-btn" id="questBtn3"><span class="btn-tier">Tier 3</span><span class="btn-pts">+3 pts</span></button>
-    </div>
-    <div class="field">
-      <label>Total Quest Points</label>
-      <input type="number" id="editorPoints" min="0" placeholder="0">
-    </div>
-
-    <!-- ── Glory ── -->
-    <div class="section-label">Glory</div>
-
-    <div class="quest-btn-label">Award Battle Victory</div>
-    <div class="opp-search-wrap">
-      <input type="text" id="opponentSearch" placeholder="Search opponent name…" autocomplete="off" autocorrect="off" spellcheck="false">
-    </div>
-    <ul id="opponentResults"></ul>
-    <div id="gloryPreview"></div>
-    <button id="awardGloryBtn">⚔️ Award Glory</button>
-
-    <div class="glory-manual-label">Manual Adjust</div>
-    <div class="glory-manual-row">
-      <input type="number" id="editorGlory" min="0" placeholder="0">
+    <!-- Inner tab bar -->
+    <div class="editor-tabs">
+      <button class="editor-tab-btn active" data-etab="quest">
+        <span class="editor-tab-icon">📜</span>Quests
+      </button>
+      <button class="editor-tab-btn" data-etab="glory">
+        <span class="editor-tab-icon">⚔️</span>Glory
+      </button>
+      <button class="editor-tab-btn" data-etab="guild">
+        <span class="editor-tab-icon">🛡️</span>Guild
+      </button>
+      <button class="editor-tab-btn" data-etab="other">
+        <span class="editor-tab-icon">⚙️</span>Other
+      </button>
     </div>
 
-    <!-- ── Guild ── -->
-    <div class="section-label">Guild</div>
-    <div class="field">
-      <select id="editorGuild">
-        <option value="None">None</option>
-        <option value="Paladins">Paladins</option>
-        <option value="Rogues">Rogues</option>
-        <option value="Druids">Druids</option>
-        <option value="Wizards">Wizards</option>
-        <option value="Inventors">Inventors</option>
-      </select>
+    <!-- Quest Panel -->
+    <div class="editor-tab-panel" data-epanel="quest">
+      <div class="panel-title quest-color">📜 Quest Points</div>
+      <div id="levelDisplay">Level <strong>1</strong></div>
+      <div class="quest-btn-label">Quick Add</div>
+      <div class="quest-btns">
+        <button class="quest-btn" id="questBtn1"><span class="btn-tier">Tier 1</span><span class="btn-pts">+1 pt</span></button>
+        <button class="quest-btn" id="questBtn2"><span class="btn-tier">Tier 2</span><span class="btn-pts">+2 pts</span></button>
+        <button class="quest-btn" id="questBtn3"><span class="btn-tier">Tier 3</span><span class="btn-pts">+3 pts</span></button>
+      </div>
+      <div class="field">
+        <label>Total Quest Points</label>
+        <input type="number" id="editorPoints" min="0" placeholder="0">
+      </div>
     </div>
 
-    <div class="section-label">Other</div>
-    <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
-    <button id="saveBtn">Save All</button>
-    <button id="deleteBtn">🗑 Delete Adventurer</button>
-    <div id="editorMsg"></div>
+    <!-- Glory Panel -->
+    <div class="editor-tab-panel hidden" data-epanel="glory">
+      <div class="panel-title glory-color">⚔️ Glory</div>
+      <div class="quest-btn-label" style="color:#6688bb">Award Battle Victory</div>
+      <div class="opp-search-wrap">
+        <input type="text" id="opponentSearch" placeholder="Search opponent name…" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <ul id="opponentResults"></ul>
+      <div id="gloryPreview"></div>
+      <button id="awardGloryBtn">⚔️ Award Glory</button>
+      <div class="glory-manual-label">Manual Adjust</div>
+      <div class="glory-manual-row">
+        <input type="number" id="editorGlory" min="0" placeholder="0">
+      </div>
+    </div>
+
+    <!-- Guild Panel -->
+    <div class="editor-tab-panel hidden" data-epanel="guild">
+      <div class="panel-title guild-color">🛡️ Guild</div>
+      <div class="field">
+        <label>Assign Guild</label>
+        <select id="editorGuild">
+          <option value="None">None</option>
+          <option value="Paladins">Paladins</option>
+          <option value="Rogues">Rogues</option>
+          <option value="Druids">Druids</option>
+          <option value="Wizards">Wizards</option>
+          <option value="Inventors">Inventors</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Other Panel -->
+    <div class="editor-tab-panel hidden" data-epanel="other">
+      <div class="panel-title other-color">⚙️ Other</div>
+      <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
+      <br><br>
+      <button id="saveBtn">Save All</button>
+      <button id="deleteBtn">🗑 Delete Adventurer</button>
+      <div id="editorMsg"></div>
+    </div>
+
   </div>
 </div>
 
