@@ -23,6 +23,7 @@
     };
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
+    const GUILD_COLORS = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
     const LEVEL_THRESHOLDS = [0, 0, 4, 10, 16];
     const VALID_USERS = ["lando", "red", "rogue", "prism", "neoninja", "glenderella"];
 
@@ -46,7 +47,8 @@
       return idx + 1;
     }
 
-    function calcGloryGain(winner, opponent) {
+    // day1 = true skips the leaderboard (top 30 / top 3) bonuses
+    function calcGloryGain(winner, opponent, day1 = false) {
       const winnerLvl = calcLevel(winner.questPoints ?? 0, winner.secretQuest);
       const oppLvl = calcLevel(opponent.questPoints ?? 0, opponent.secretQuest);
       const oppRank = getGloryRank(opponent.id);
@@ -55,8 +57,10 @@
       const breakdown = ["+1 base win"];
 
       if (oppLvl > winnerLvl) { glory += 1; breakdown.push("+1 higher level opponent"); }
-      if (oppRank !== null && oppRank <= 30) { glory += 1; breakdown.push("+1 leaderboard opponent (top 30)"); }
-      if (oppRank !== null && oppRank <= 3) { glory += 1; breakdown.push("+1 top 3 opponent"); }
+      if (!day1) {
+        if (oppRank !== null && oppRank <= 30) { glory += 1; breakdown.push("+1 leaderboard opponent (top 30)"); }
+        if (oppRank !== null && oppRank <= 3) { glory += 1; breakdown.push("+1 top 3 opponent"); }
+      }
 
       return { glory, breakdown };
     }
@@ -75,6 +79,7 @@
       allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (activeTab === "glory")  renderGloryLeaderboard();
       if (activeTab === "guild")  renderGuildLeaderboard();
+      if (activeTab === "stats")  renderStats();
       if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
       const oppInput = document.getElementById("opponentSearch");
       if (oppInput && oppInput.value) renderOpponentResults(oppInput.value);
@@ -109,7 +114,7 @@
       const isPrefix = allPlayers.some(p => p.name.toLowerCase().startsWith(q.trim().toLowerCase()));
       document.getElementById("newPlayerName").value = q.trim() && !isPrefix ? q.trim() : "";
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
-      const guildColors = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
+      const guildColors = GUILD_COLORS;
       list.innerHTML = results.map(p => {
         const points = p.questPoints ?? 0;
         const lvl = calcLevel(points, p.secretQuest);
@@ -161,27 +166,43 @@
       });
     }
 
+    function hideGloryAward() {
+      document.getElementById("gloryPreview").style.display = "none";
+      document.getElementById("awardGloryBtn").style.display = "none";
+      document.getElementById("awardDay1GloryBtn").style.display = "none";
+    }
+
     function selectOpponent(id) {
       selectedOpponent = allPlayers.find(p => p.id === id);
       if (!selectedOpponent) return;
       document.getElementById("opponentSearch").value = selectedOpponent.name;
       document.getElementById("opponentResults").innerHTML = "";
-      const { glory, breakdown } = calcGloryGain(selectedPlayer, selectedOpponent);
+      const std = calcGloryGain(selectedPlayer, selectedOpponent, false);
+      const day1 = calcGloryGain(selectedPlayer, selectedOpponent, true);
       const oppLvl = calcLevel(selectedOpponent.questPoints ?? 0, selectedOpponent.secretQuest);
       const oppRank = getGloryRank(selectedOpponent.id);
       document.getElementById("gloryPreview").innerHTML = `
         <div class="glory-preview-name">${selectedOpponent.name} · Lvl ${oppLvl}${oppRank ? " · Rank #" + oppRank : ""}</div>
-        <div class="glory-breakdown">${breakdown.map(b => `<span>${b}</span>`).join("")}</div>
-        <div class="glory-total">Total: <strong>+${glory} glory</strong></div>
+        <div class="glory-breakdown">${std.breakdown.map(b => `<span>${b}</span>`).join("")}</div>
+        <div class="glory-total">Total: <strong>+${std.glory} glory</strong></div>
+        <div class="glory-day1-note">Day 1 (no leaderboard bonus): +${day1.glory} glory</div>
       `;
       document.getElementById("gloryPreview").style.display = "block";
-      document.getElementById("awardGloryBtn").style.display = "block";
-      document.getElementById("awardGloryBtn").dataset.amount = glory;
+
+      const day1Btn = document.getElementById("awardDay1GloryBtn");
+      day1Btn.dataset.amount = day1.glory;
+      day1Btn.textContent = `🌅 Award Day 1 Glory (+${day1.glory})`;
+      day1Btn.style.display = "block";
+
+      const stdBtn = document.getElementById("awardGloryBtn");
+      stdBtn.dataset.amount = std.glory;
+      stdBtn.textContent = `⚔️ Award Glory (+${std.glory})`;
+      stdBtn.style.display = "block";
     }
 
-    async function awardGlory() {
+    async function awardGlory(btnId) {
       if (!selectedPlayer || !selectedOpponent) return;
-      const amount = parseInt(document.getElementById("awardGloryBtn").dataset.amount);
+      const amount = parseInt(document.getElementById(btnId).dataset.amount);
       const currentGlory = parseInt(document.getElementById("editorGlory").value) || 0;
       const newGlory = currentGlory + amount;
       document.getElementById("editorGlory").value = newGlory;
@@ -191,8 +212,7 @@
         selectedPlayer.glory = newGlory;
         selectedOpponent = null;
         document.getElementById("opponentSearch").value = "";
-        document.getElementById("gloryPreview").style.display = "none";
-        document.getElementById("awardGloryBtn").style.display = "none";
+        hideGloryAward();
         msg.textContent = `+${amount} glory awarded!`;
         msg.style.color = "#ffcc44";
         setTimeout(() => { msg.textContent = ""; }, 2500);
@@ -223,11 +243,12 @@
       document.getElementById("editorGuild").value = p.guild || "None";
       document.getElementById("editorMsg").textContent = "";
 
+      closeEditName();
+
       selectedOpponent = null;
       document.getElementById("opponentSearch").value = "";
       document.getElementById("opponentResults").innerHTML = "";
-      document.getElementById("gloryPreview").style.display = "none";
-      document.getElementById("awardGloryBtn").style.display = "none";
+      hideGloryAward();
 
       updateLevelDisplay(points, p.secretQuest);
 
@@ -245,6 +266,55 @@
       // Switch to first tab
       switchEditorTab("quest");
       document.getElementById("playerEditor").classList.remove("hidden");
+    }
+
+    // ── Rename ──
+    function openEditName() {
+      if (!selectedPlayer) return;
+      const input = document.getElementById("editNameInput");
+      input.value = selectedPlayer.name;
+      document.getElementById("editNameMsg").textContent = "";
+      document.getElementById("editNameRow").classList.remove("hidden");
+      document.getElementById("editNameBtn").classList.add("hidden");
+      input.focus();
+      input.select();
+    }
+
+    function closeEditName() {
+      document.getElementById("editNameRow").classList.add("hidden");
+      document.getElementById("editNameBtn").classList.remove("hidden");
+    }
+
+    async function renameAdventurer() {
+      if (!selectedPlayer) return;
+      const msg = document.getElementById("editNameMsg");
+      const newName = document.getElementById("editNameInput").value.trim().replace(/\s+/g, " ");
+      if (!newName) {
+        msg.textContent = "Name can't be empty.";
+        msg.style.color = "#ff6655";
+        return;
+      }
+      if (newName === selectedPlayer.name) { closeEditName(); return; }
+      const duplicate = allPlayers.find(p =>
+        p.id !== selectedPlayer.id && p.name.toLowerCase() === newName.toLowerCase()
+      );
+      if (duplicate) {
+        msg.textContent = `"${duplicate.name}" already exists.`;
+        msg.style.color = "#ff6655";
+        return;
+      }
+      try {
+        await updateDoc(doc(db, "players", selectedPlayer.id), { name: newName });
+        selectedPlayer.name = newName;
+        document.getElementById("editorName").textContent = newName;
+        closeEditName();
+        msg.textContent = "✔ Renamed!";
+        msg.style.color = "#66cc66";
+        setTimeout(() => { msg.textContent = ""; }, 2000);
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#ff6655";
+      }
     }
 
     function updateLevelDisplay(points, secretQuest) {
@@ -420,7 +490,7 @@
         tbody.innerHTML = `<tr><td colspan="4" class="empty">No adventurers yet.</td></tr>`;
         return;
       }
-      const guildColors = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
+      const guildColors = GUILD_COLORS;
       tbody.innerHTML = sorted.map((p, i) => {
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         const guildHtml = p.guild && p.guild !== "None"
@@ -479,6 +549,24 @@
       }).join("");
     }
 
+    // ── Stats ──
+    function renderStats() {
+      document.getElementById("statTotal").textContent = allPlayers.length;
+      const noGuild = allPlayers.filter(p => !p.guild || p.guild === "None").length;
+      const cards = GUILDS.map(g => {
+        const count = allPlayers.filter(p => p.guild === g).length;
+        return `<div class="stat-card" style="border-color:${GUILD_COLORS[g]}">
+          <div class="stat-num" style="color:${GUILD_COLORS[g]}">${count}</div>
+          <div class="stat-label">${g}</div>
+        </div>`;
+      });
+      cards.push(`<div class="stat-card" style="border-color:#555">
+        <div class="stat-num" style="color:#999">${noGuild}</div>
+        <div class="stat-label">No Guild</div>
+      </div>`);
+      document.getElementById("statsGrid").innerHTML = cards.join("");
+    }
+
     function switchTab(tab) {
       activeTab = tab;
       document.querySelectorAll(".tab-btn").forEach(b =>
@@ -489,6 +577,7 @@
       );
       if (tab === "glory")  renderGloryLeaderboard();
       if (tab === "guild")  renderGuildLeaderboard();
+      if (tab === "stats")  renderStats();
       if (tab === "search") renderResults(document.getElementById("searchInput").value);
     }
 
@@ -522,6 +611,15 @@
         selectedPlayer = null;
       });
 
+      // Rename
+      document.getElementById("editNameBtn").addEventListener("click", openEditName);
+      document.getElementById("editNameSave").addEventListener("click", renameAdventurer);
+      document.getElementById("editNameCancel").addEventListener("click", closeEditName);
+      document.getElementById("editNameInput").addEventListener("keydown", e => {
+        if (e.key === "Enter") renameAdventurer();
+        if (e.key === "Escape") closeEditName();
+      });
+
       document.querySelectorAll(".editor-tab-btn").forEach(btn =>
         btn.addEventListener("click", () => switchEditorTab(btn.dataset.etab))
       );
@@ -531,7 +629,8 @@
       document.getElementById("questBtn3").addEventListener("click", () => addQuestPoints(3));
 
       document.getElementById("opponentSearch").addEventListener("input", e => renderOpponentResults(e.target.value));
-      document.getElementById("awardGloryBtn").addEventListener("click", awardGlory);
+      document.getElementById("awardDay1GloryBtn").addEventListener("click", () => awardGlory("awardDay1GloryBtn"));
+      document.getElementById("awardGloryBtn").addEventListener("click", () => awardGlory("awardGloryBtn"));
 
       document.getElementById("saveBtn").addEventListener("click", savePlayer);
 
@@ -574,6 +673,8 @@
     .tabs { display: flex; background: #0d0020; border-bottom: 3px solid transparent; border-image: linear-gradient(90deg, #ff4444, #ffee00, #44cc44, #4488ff, #9944ff) 1; overflow-x: auto; }
     .tab-btn { flex: 1; min-width: 100px; padding: 15px 8px; font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; letter-spacing: 1px; background: none; border: none; cursor: pointer; color: #9980bb; white-space: nowrap; }
     .tab-btn.active { background: linear-gradient(90deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; border-bottom: 3px solid #ffaa00; }
+    /* Smaller, dimmer tab for less important pages */
+    .tab-btn.tab-minor { flex: 0 0 auto; min-width: 70px; padding: 15px 14px; font-size: 11px; color: #6a5a8a; }
 
     .tab-panel { padding: 20px; }
     .hidden { display: none !important; }
@@ -613,12 +714,22 @@
       border-radius: 10px 10px 0 0;
       flex-shrink: 0;
     }
-    .editor-header-left { display: flex; flex-direction: column; gap: 4px; }
+    .editor-header-left { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
     .editor-header h2 { font-family: 'Cinzel', serif; font-size: 24px; background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
     .editor-header-stats { display: flex; gap: 12px; align-items: center; }
     .editor-lvl-badge { font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; }
     .editor-pts-badge { font-family: 'Cinzel', serif; font-size: 14px; color: #9977cc; }
-    #closeEditor { background: none; border: none; font-size: 30px; cursor: pointer; color: #9977cc; line-height: 1; flex-shrink: 0; }
+    #closeEditor { background: none; border: none; font-size: 30px; cursor: pointer; color: #9977cc; line-height: 1; flex-shrink: 0; align-self: flex-start; }
+
+    /* ── Rename ── */
+    .edit-name-btn { align-self: flex-start; margin-top: 6px; padding: 6px 12px; background: transparent; border: 1px solid #7744cc; border-radius: 6px; color: #cc99ff; font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; cursor: pointer; }
+    .edit-name-btn:hover { background: rgba(120,70,200,0.2); }
+    #editNameRow { display: flex; gap: 6px; margin-top: 8px; margin-right: 12px; }
+    #editNameInput { flex: 1; min-width: 0; padding: 10px 12px; font-family: 'IM Fell English', serif; font-size: 18px; background: #0d0020; color: #f0e6d3; border: 2px solid #aa66ff; border-radius: 6px; outline: none; }
+    .edit-name-action { padding: 10px 12px; border: none; border-radius: 6px; font-family: 'Cinzel', serif; font-size: 13px; font-weight: 700; cursor: pointer; }
+    #editNameSave { background: linear-gradient(135deg, #44aa44, #228822); color: #fff; }
+    #editNameCancel { background: #2a1a4a; color: #aa88dd; }
+    #editNameMsg { font-size: 14px; font-style: italic; min-height: 18px; }
 
     /* ── Inner editor tabs ── */
     .editor-tabs {
@@ -726,7 +837,10 @@
     .glory-breakdown span::before { content: "✦ "; color: #ffaa33; }
     .glory-total { font-family: 'Cinzel', serif; font-size: 18px; color: #ffee44; }
     .glory-total strong { font-size: 22px; }
+    .glory-day1-note { margin-top: 6px; font-size: 14px; color: #88bbee; font-style: italic; }
 
+    #awardDay1GloryBtn { width: 100%; padding: 16px; background: linear-gradient(135deg, #1a5f8a, #2a8ab9); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 17px; font-weight: 700; cursor: pointer; margin-bottom: 10px; letter-spacing: 1px; display: none; box-shadow: 0 2px 14px rgba(40,130,200,0.4); }
+    #awardDay1GloryBtn:hover { filter: brightness(1.1); }
     #awardGloryBtn { width: 100%; padding: 16px; background: linear-gradient(135deg, #aa7700, #ddaa00); color: #1a0a00; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; cursor: pointer; margin-bottom: 14px; letter-spacing: 1px; display: none; box-shadow: 0 2px 14px rgba(200,150,0,0.4); }
     #awardGloryBtn:hover { filter: brightness(1.1); }
 
@@ -765,6 +879,15 @@
     .guild-tab-btn { padding: 8px 16px; border: 2px solid #5533aa; border-radius: 20px; background: transparent; color: #aa88dd; font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; transition: all 0.2s; }
     .guild-tab-btn.active { background: linear-gradient(135deg, #5533aa, #7744cc); color: #fff; border-color: #9966ff; box-shadow: 0 2px 10px rgba(100,60,200,0.4); }
     #guildHeader { font-family: 'Cinzel Decorative', serif; font-size: 20px; margin-bottom: 14px; background: linear-gradient(90deg, #ff9966, #ffee44, #66ffaa, #66aaff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+
+    /* ── Stats ── */
+    .stats-total { background: #0d0020; border: 2px solid #7744cc; border-radius: 12px; padding: 22px; text-align: center; margin-bottom: 16px; }
+    .stats-total-num { font-family: 'Cinzel', serif; font-size: 48px; font-weight: 700; color: #ffcc44; line-height: 1; }
+    .stats-total-label { font-family: 'Cinzel', serif; font-size: 13px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 8px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+    .stat-card { background: #0d0020; border: 2px solid; border-radius: 10px; padding: 16px; text-align: center; }
+    .stat-num { font-family: 'Cinzel', serif; font-size: 32px; font-weight: 700; line-height: 1; }
+    .stat-label { font-family: 'Cinzel', serif; font-size: 12px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
 
     /* ── Login ── */
     #loginScreen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #0d0020 0%, #1a0050 50%, #0d0020 100%); padding: 24px; }
@@ -825,6 +948,7 @@
   <button class="tab-btn active" data-tab="search">Players</button>
   <button class="tab-btn" data-tab="glory">Glory Board</button>
   <button class="tab-btn" data-tab="guild">Guild Board</button>
+  <button class="tab-btn tab-minor" data-tab="stats">Stats</button>
 </div>
 
 <div class="tab-panel" id="tab-search">
@@ -853,6 +977,14 @@
   </table>
 </div>
 
+<div class="tab-panel hidden" id="tab-stats">
+  <div class="stats-total">
+    <div class="stats-total-num" id="statTotal">0</div>
+    <div class="stats-total-label">Total Adventurers</div>
+  </div>
+  <div class="stats-grid" id="statsGrid"></div>
+</div>
+
 <!-- Player Editor Modal -->
 <div id="playerEditor" class="hidden">
   <div class="editor-card">
@@ -866,6 +998,13 @@
           <span style="color:#3a2060">·</span>
           <span class="editor-pts-badge" id="editorNamePts">0 pts</span>
         </div>
+        <button id="editNameBtn" class="edit-name-btn">✏️ Edit Name</button>
+        <div id="editNameRow" class="hidden">
+          <input type="text" id="editNameInput" autocomplete="off" autocorrect="off" spellcheck="false">
+          <button id="editNameSave" class="edit-name-action">Save</button>
+          <button id="editNameCancel" class="edit-name-action">✕</button>
+        </div>
+        <div id="editNameMsg"></div>
       </div>
       <button id="closeEditor">✕</button>
     </div>
@@ -914,6 +1053,7 @@
       </div>
       <ul id="opponentResults"></ul>
       <div id="gloryPreview"></div>
+      <button id="awardDay1GloryBtn">🌅 Award Day 1 Glory</button>
       <button id="awardGloryBtn">⚔️ Award Glory</button>
       <div class="glory-manual-label">Manual Adjust</div>
       <div class="glory-manual-row">
