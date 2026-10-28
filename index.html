@@ -23,6 +23,8 @@
     };
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
+    // Guilds offered in the Level 4 guild-sticker picker (Inventors can't be joined there)
+    const JOINABLE_GUILDS = ["Paladins", "Rogues", "Druids", "Wizards"];
     const GUILD_COLORS = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
     // Index = level. [2] and [3] are editable in Admin → Quest Point Thresholds (saved in settings/config).
     const DEFAULT_THRESHOLDS = { 2: 4, 3: 10 };
@@ -587,7 +589,7 @@
 
       const needsGuild = fromLvl < 4 && toLvl >= 4;
       document.getElementById("guildStickerPick").classList.toggle("hidden", !needsGuild);
-      pendingGuildSticker = needsGuild && selectedPlayer?.guild && selectedPlayer.guild !== "None"
+      pendingGuildSticker = needsGuild && JOINABLE_GUILDS.includes(selectedPlayer?.guild)
         ? selectedPlayer.guild : null;
       if (needsGuild) renderGuildStickerOptions();
 
@@ -596,7 +598,7 @@
 
     function renderGuildStickerOptions() {
       const wrap = document.getElementById("guildStickerOptions");
-      wrap.innerHTML = GUILDS.map(g => `
+      wrap.innerHTML = JOINABLE_GUILDS.map(g => `
         <button type="button" class="guild-pick-btn${g === pendingGuildSticker ? " selected" : ""}" data-guild="${g}" style="--gc:${GUILD_COLORS[g]}">
           ${guildIcon(g, "guild-pick-img")}
           <span>${g}</span>
@@ -1265,8 +1267,7 @@
 
     /* ── Level up ── */
     #levelUpOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
-    .levelup-card { background: linear-gradient(160deg, #0d0030, #1a0050); border: 3px solid transparent; border-radius: 16px; padding: 32px 28px; text-align: center; max-width: 400px; width: 92%; max-height: 92vh; overflow-y: auto; box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5); position: relative; }
-    .levelup-card::before { content: ''; position: absolute; inset: 0; border-radius: 14px; padding: 3px; background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
+    .levelup-card { background: linear-gradient(160deg, #0d0030, #1a0050) padding-box, linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff) border-box; border: 3px solid transparent; border-radius: 16px; padding: 32px 28px; text-align: center; max-width: 400px; width: 92%; max-height: 92vh; overflow-y: auto; box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5); position: relative; }
     .levelup-card .lvl-img { height: 110px; width: auto; margin-bottom: 10px; }
     .levelup-card h2 { font-family: 'Cinzel Decorative', serif; font-size: 28px; background: linear-gradient(90deg, #ffcc00, #ff9900, #ffee44); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 12px; }
     #levelUpText { font-family: 'IM Fell English', serif; font-size: 18px; color: #e8d5ff; margin-bottom: 18px; font-style: italic; }
@@ -1278,7 +1279,7 @@
     .reward-slot.filled { border: none; }
     .reward-emoji { font-size: 30px; }
     .rewards-sub { font-family: 'IM Fell English', serif; font-style: italic; font-size: 14px; color: #aa88dd; margin-bottom: 10px; }
-    .guild-pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 8px; margin-bottom: 20px; }
+    .guild-pick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px; }
     .guild-pick-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; background: #0d0020; border: 2px solid #3a2060; border-radius: 10px; cursor: pointer; color: #aa88dd; font-family: 'Cinzel', serif; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
     .guild-pick-btn.selected { border-color: var(--gc); color: var(--gc); background: #1a0840; box-shadow: 0 0 12px var(--gc); }
     .guild-pick-img { height: 40px; width: 40px; object-fit: contain; }
