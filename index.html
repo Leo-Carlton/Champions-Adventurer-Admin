@@ -299,7 +299,6 @@
       hideGloryAward();
 
       updateLevelDisplay(points);
-      refreshQuestFlagButtons();
 
       // Switch to first tab
       switchEditorTab("quest");
@@ -383,6 +382,12 @@
         btn.disabled = locked;
         btn.querySelector(".btn-tier").textContent = locked ? `🔒 Lvl ${tier}+` : `Tier ${tier}`;
       });
+      const sqBtn = document.getElementById("secretQuestBtn");
+      const done = selectedPlayer ? secretCount(selectedPlayer) : 0;
+      sqBtn.disabled = lvl < 4;
+      sqBtn.querySelector(".btn-tier").textContent = lvl < 4
+        ? "🔒 Secret Quest · Lvl 4+"
+        : `Secret Quest${done ? ` · completed ${done}×` : " · first one grants Level 5"}`;
 
       // Update header badge
       if (selectedPlayer) {
@@ -429,8 +434,7 @@
         p.level3Quest = !!level3Quest;
         document.getElementById("editorPoints").value = newPoints;
         updateLevelDisplay(newPoints);
-        refreshQuestFlagButtons();
-        if (newLvl > oldLvl) {
+          if (newLvl > oldLvl) {
           showLevelUp(selectedPlayer.name, oldLvl, newLvl);
         } else {
           msg.textContent = `+${amount} quest pt${amount > 1 ? "s" : ""} added!`;
@@ -467,88 +471,39 @@
       }
     }
 
-    // Buttons in the Other tab that show / undo the quest milestones
-    function refreshQuestFlagButtons() {
+    // Secret quests can be done many times. The first one (from Level 4) grants Level 5;
+    // every one adds SECRET_QUEST_POINTS.
+    const secretCount = p => p.secretQuestCount ?? (p.secretQuest ? 1 : 0);
+
+    async function addSecretQuest() {
       const p = selectedPlayer;
       if (!p) return;
-      const sqBtn = document.getElementById("secretQuestBtn");
-      if (p.secretQuest) {
-        sqBtn.textContent = `✔ Secret Quest Complete — Tap to Undo (−${SECRET_QUEST_POINTS} pts)`;
-        sqBtn.classList.add("sq-done");
-      } else {
-        sqBtn.textContent = `🔐 Mark Secret Quest Complete (+${SECRET_QUEST_POINTS} pts)`;
-        sqBtn.classList.remove("sq-done");
-      }
-      const l3Btn = document.getElementById("level3QuestBtn");
-      l3Btn.classList.toggle("hidden", !p.level3Quest);
-      l3Btn.textContent = "✔ Level 3 Quest Complete (Lvl 4) — Tap to Undo (−3 pts)";
-    }
-
-    function setPointsAfterFlagChange(points) {
-      selectedPlayer.questPoints = points;
-      document.getElementById("editorPoints").value = points;
-      updateLevelDisplay(points);
-      refreshQuestFlagButtons();
-    }
-
-    async function toggleSecretQuest() {
-      const p = selectedPlayer;
-      const points = parseInt(document.getElementById("editorPoints").value) || p.questPoints || 0;
       const msg = document.getElementById("editorMsg");
-
-      if (p.secretQuest) {
-        // Undo: remove the flag and the points it gave
-        const newPoints = Math.max(0, points - SECRET_QUEST_POINTS);
-        try {
-          await updateDoc(doc(db, "players", p.id), { secretQuest: false, questPoints: newPoints });
-          p.secretQuest = false;
-          setPointsAfterFlagChange(newPoints);
-          msg.textContent = `Secret quest undone (−${SECRET_QUEST_POINTS} pts).`;
-          msg.style.color = "#aa88dd";
-          setTimeout(() => { msg.textContent = ""; }, 2000);
-        } catch (e) {
-          msg.textContent = "Error: " + e.message;
-          msg.style.color = "#c0392b";
-        }
-      } else {
-        if (!p.level3Quest) {
-          msg.textContent = "Adventurer must be Level 4 (complete a Level 3 quest) before the secret quest.";
-          msg.style.color = "#c0392b";
-          return;
-        }
-        const newPoints = points + SECRET_QUEST_POINTS;
-        try {
-          await updateDoc(doc(db, "players", p.id), { secretQuest: true, questPoints: newPoints });
-          p.secretQuest = true;
-          setPointsAfterFlagChange(newPoints);
-          showLevelUp(p.name, 4, 5);
-        } catch (e) {
-          msg.textContent = "Error: " + e.message;
-          msg.style.color = "#c0392b";
-        }
-      }
-    }
-
-    // Undo for a mis-tapped first Level 3 quest
-    async function undoLevel3Quest() {
-      const p = selectedPlayer;
-      const msg = document.getElementById("editorMsg");
-      if (!p?.level3Quest) return;
-      if (p.secretQuest) {
-        msg.textContent = "Undo the secret quest first.";
+      const points = parseInt(document.getElementById("editorPoints").value) || 0;
+      const oldLvl = calcLevel(points, p.secretQuest, p.level3Quest);
+      if (oldLvl < 4) {
+        msg.textContent = "Adventurer must be Level 4 (complete a Level 3 quest) before a secret quest.";
         msg.style.color = "#c0392b";
         return;
       }
-      if (!confirm(`Undo ${p.name}'s Level 3 quest? They drop back to Level 3 and lose 3 pts.`)) return;
-      const points = parseInt(document.getElementById("editorPoints").value) || p.questPoints || 0;
-      const newPoints = Math.max(0, points - 3);
+      const newPoints = points + SECRET_QUEST_POINTS;
+      const count = secretCount(p) + 1;
+      const glory = parseInt(document.getElementById("editorGlory").value) || 0;
+      const guild = document.getElementById("editorGuild").value;
       try {
-        await updateDoc(doc(db, "players", p.id), { level3Quest: false, questPoints: newPoints });
-        p.level3Quest = false;
-        setPointsAfterFlagChange(newPoints);
-        msg.textContent = "Level 3 quest undone (−3 pts).";
-        msg.style.color = "#aa88dd";
-        setTimeout(() => { msg.textContent = ""; }, 2000);
+        await updateDoc(doc(db, "players", p.id), { questPoints: newPoints, secretQuest: true, secretQuestCount: count, glory, guild });
+        p.questPoints = newPoints;
+        p.secretQuest = true;
+        p.secretQuestCount = count;
+        document.getElementById("editorPoints").value = newPoints;
+        updateLevelDisplay(newPoints);
+        if (oldLvl < 5) {
+          showLevelUp(p.name, oldLvl, 5);
+        } else {
+          msg.textContent = `+${SECRET_QUEST_POINTS} pts — secret quest #${count} complete!`;
+          msg.style.color = "#cc88ff";
+          setTimeout(() => { msg.textContent = ""; }, 2500);
+        }
       } catch (e) {
         msg.textContent = "Error: " + e.message;
         msg.style.color = "#c0392b";
@@ -839,7 +794,7 @@
           ${statCard(totalGlory, "Glory Awarded", "#66aaff")}
           ${statCard(avg(totalGlory), "Avg Glory", "#66aaff")}
           ${statCard(ps.filter(p => p.level3Quest).length, "Level 3 Quests Done", "#cc88ff")}
-          ${statCard(ps.filter(p => p.secretQuest).length, "Secret Quests Done", "#cc88ff")}
+          ${statCard(ps.reduce((t, p) => t + secretCount(p), 0), "Secret Quests Done", "#cc88ff")}
         </div>
 
         <div class="stats-heading">Leaders</div>
@@ -1027,7 +982,6 @@
       document.getElementById("awardDay1GloryBtn").addEventListener("click", () => awardGlory("awardDay1GloryBtn"));
       document.getElementById("awardGloryBtn").addEventListener("click", () => awardGlory("awardGloryBtn"));
 
-      document.getElementById("saveBtn").addEventListener("click", savePlayer);
 
       // Per-tab save buttons
       async function saveAndFlash(btnId) {
@@ -1041,8 +995,7 @@
       document.getElementById("saveBtnQuest").addEventListener("click", () => saveAndFlash("saveBtnQuest"));
       document.getElementById("saveBtnGlory").addEventListener("click", () => saveAndFlash("saveBtnGlory"));
       document.getElementById("saveBtnGuild").addEventListener("click", () => saveAndFlash("saveBtnGuild"));
-      document.getElementById("secretQuestBtn").addEventListener("click", toggleSecretQuest);
-      document.getElementById("level3QuestBtn").addEventListener("click", undoLevel3Quest);
+      document.getElementById("secretQuestBtn").addEventListener("click", addSecretQuest);
 
       // Admin
       document.getElementById("adminPassBtn").addEventListener("click", unlockAdmin);
@@ -1163,12 +1116,10 @@
     .editor-tab-btn[data-etab="quest"]  { border-top: 3px solid #ddaa00; }
     .editor-tab-btn[data-etab="glory"]  { border-top: 3px solid #2255aa; }
     .editor-tab-btn[data-etab="guild"]  { border-top: 3px solid var(--guild-color, #44aa44); }
-    .editor-tab-btn[data-etab="other"]  { border-top: 3px solid #9b59b6; }
 
     .editor-tab-btn[data-etab="quest"].active  { background: #221a00; color: #ffcc44; border-bottom: 3px solid #ddaa00; }
     .editor-tab-btn[data-etab="glory"].active  { background: #0d1a35; color: #66aaff; border-bottom: 3px solid #3377cc; }
     .editor-tab-btn[data-etab="guild"].active  { background: #0d2210; color: var(--guild-color, #66dd66); border-bottom: 3px solid var(--guild-color, #44aa44); }
-    .editor-tab-btn[data-etab="other"].active  { background: #1a0d2a; color: #cc88ff; border-bottom: 3px solid #9b59b6; }
 
     .editor-tab-icon { font-size: 18px; display: block; margin-bottom: 3px; }
 
@@ -1179,7 +1130,6 @@
     .editor-tab-panel[data-epanel="quest"] { border-left: 3px solid #ddaa00; }
     .editor-tab-panel[data-epanel="glory"] { border-left: 3px solid #2255aa; }
     .editor-tab-panel[data-epanel="guild"] { border-left: 3px solid var(--guild-color, #44aa44); }
-    .editor-tab-panel[data-epanel="other"] { border-left: 3px solid #9b59b6; }
 
     /* Panel section titles */
     .panel-title {
@@ -1213,7 +1163,6 @@
     .quest-btn:active { transform: scale(0.96); }
     .quest-btn:hover { filter: brightness(1.15); }
     .quest-btn:disabled { opacity: 0.35; filter: grayscale(1); cursor: not-allowed; transform: none; }
-    #level3QuestBtn { width: 100%; padding: 14px; background: linear-gradient(135deg, #3a7a3a, #2a6a2a); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600; cursor: pointer; margin-bottom: 12px; letter-spacing: 0.5px; }
     #questBtn1 { background: linear-gradient(135deg, #2255aa, #3377cc); box-shadow: 0 2px 10px rgba(50,100,200,0.4); }
     #questBtn2 { background: linear-gradient(135deg, #aa5500, #cc7722); box-shadow: 0 2px 10px rgba(180,100,20,0.4); }
     #questBtn3 { background: linear-gradient(135deg, #880088, #bb22bb); box-shadow: 0 2px 10px rgba(150,30,150,0.4); }
@@ -1257,13 +1206,11 @@
     #awardGloryBtn { width: 100%; padding: 16px; background: linear-gradient(135deg, #aa7700, #ddaa00); color: #1a0a00; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; cursor: pointer; margin-bottom: 14px; letter-spacing: 1px; display: none; box-shadow: 0 2px 14px rgba(200,150,0,0.4); }
     #awardGloryBtn:hover { filter: brightness(1.1); }
 
-    #secretQuestBtn { width: 100%; padding: 16px; background: linear-gradient(135deg, #6c3483, #9b59b6); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 17px; font-weight: 600; cursor: pointer; margin-bottom: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 12px rgba(150,50,200,0.4); }
-    #secretQuestBtn.sq-done { background: #3a3a3a; box-shadow: none; cursor: default; }
 
-    #saveBtn { width: 100%; padding: 18px; background: linear-gradient(135deg, #1a5fa8, #2980b9); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 20px; font-weight: 700; cursor: pointer; margin-bottom: 12px; letter-spacing: 1px; box-shadow: 0 2px 12px rgba(40,120,200,0.4); }
-    #deleteBtn { width: 100%; padding: 15px; background: transparent; color: #ff6655; border: 2px solid #aa3322; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 17px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; }
+    .delete-adv-btn { align-self: flex-start; margin-top: 6px; padding: 6px 12px; background: transparent; border: 1px solid #aa3322; border-radius: 6px; color: #ff6655; font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; cursor: pointer; }
+    #secretQuestBtn { width: 100%; margin-bottom: 20px; background: linear-gradient(135deg, #4a1a6a, #8e44ad, #c06cd8); box-shadow: 0 2px 14px rgba(160,70,220,0.45); }
     #deleteBtn:hover { background: rgba(180,50,40,0.15); }
-    #editorMsg { margin-top: 12px; font-size: 17px; min-height: 24px; text-align: center; font-style: italic; }
+    #editorMsg { padding: 0 24px 16px; margin-top: 4px; font-size: 17px; min-height: 24px; text-align: center; font-style: italic; }
 
     /* ── Level up ── */
     #levelUpOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
@@ -1380,8 +1327,6 @@
     .tab-save-btn:hover { filter: brightness(1.1); }
     .tab-save-msg { font-size: 15px; min-height: 20px; text-align: center; font-style: italic; margin-top: 8px; }
 
-    /* sq-done toggle style */
-    #secretQuestBtn.sq-done { background: linear-gradient(135deg, #3a7a3a, #2a6a2a); box-shadow: 0 2px 12px rgba(50,150,50,0.3); cursor: pointer; }
 
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0d0020; }
@@ -1510,6 +1455,7 @@
           <button id="editNameCancel" class="edit-name-action">✕</button>
         </div>
         <div id="editNameMsg"></div>
+        <button id="deleteBtn" class="delete-adv-btn">🗑 Delete Adventurer</button>
       </div>
       <img id="editorLvlImg" class="editor-lvl-img" src="" alt="">
       <button id="closeEditor">✕</button>
@@ -1526,9 +1472,6 @@
       <button class="editor-tab-btn" data-etab="guild">
         <span class="editor-tab-icon">🛡️</span>Guild
       </button>
-      <button class="editor-tab-btn" data-etab="other">
-        <span class="editor-tab-icon">⚙️</span>Other
-      </button>
     </div>
 
     <!-- Quest Panel -->
@@ -1542,6 +1485,7 @@
         <button class="quest-btn" id="questBtn2"><span class="btn-tier">Tier 2</span><span class="btn-pts">+2 pts</span></button>
         <button class="quest-btn" id="questBtn3"><span class="btn-tier">Tier 3</span><span class="btn-pts">+3 pts</span></button>
       </div>
+      <button class="quest-btn" id="secretQuestBtn"><span class="btn-tier">Secret Quest</span><span class="btn-pts">🔐 +5 pts</span></button>
       <div class="field">
         <label>Total Quest Points</label>
         <input type="number" id="editorPoints" min="0" placeholder="0">
@@ -1587,16 +1531,8 @@
       <div class="tab-save-msg"></div>
     </div>
 
-    <!-- Other Panel -->
-    <div class="editor-tab-panel hidden" data-epanel="other">
-      <div class="panel-title other-color">⚙️ Other</div>
-      <button id="level3QuestBtn" class="hidden"></button>
-      <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
-      <br><br>
-      <button id="saveBtn">Save All</button>
-      <button id="deleteBtn">🗑 Delete Adventurer</button>
-      <div id="editorMsg"></div>
-    </div>
+    <!-- Messages for every tab -->
+    <div id="editorMsg"></div>
 
   </div>
 </div>
