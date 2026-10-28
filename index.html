@@ -238,8 +238,7 @@
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
 
       document.getElementById("editorName").textContent = p.name;
-      document.getElementById("editorNameLvl").textContent = `Lvl ${lvl}`;
-      document.getElementById("editorNameLvl").style.color = lvlColors[lvl] || "#c8b89a";
+      setEditorLevelImg(lvl);
       document.getElementById("editorNamePts").textContent = `${points} pts`;
       document.getElementById("editorPoints").value = points;
       document.getElementById("editorGlory").value = p.glory ?? 0;
@@ -340,10 +339,17 @@
 
       // Update header badge
       if (selectedPlayer) {
-        document.getElementById("editorNameLvl").textContent = `Lvl ${lvl}`;
-        document.getElementById("editorNameLvl").style.color = lvlColors[lvl] || "#c8b89a";
+        setEditorLevelImg(lvl);
         document.getElementById("editorNamePts").textContent = `${points} pts`;
       }
+    }
+
+    // Large level image in the top-right of the adventurer pop-up
+    function setEditorLevelImg(lvl) {
+      const img = document.getElementById("editorLvlImg");
+      img.src = `Level${lvl}.png`;
+      img.alt = `Level ${lvl}`;
+      img.title = `Level ${lvl}`;
     }
 
     function switchEditorTab(tab) {
@@ -928,7 +934,8 @@
 
     /* ── Custom images (resize these to taste) ── */
     .guild-icon { height: 32px; width: auto; vertical-align: middle; }
-    .row-lvl-img { height: 34px; width: auto; vertical-align: middle; }
+    .row-lvl-img { height: 48px; width: auto; vertical-align: middle; }
+    .editor-lvl-img { height: 96px; width: auto; flex-shrink: 0; margin: 0 8px 0 12px; align-self: center; }
     .glory-icon { height: 22px; width: auto; vertical-align: middle; }
     .opp-meta .glory-icon { height: 16px; }
     .tab-img { height: 22px; width: auto; display: block; margin: 0 auto; }
@@ -1069,8 +1076,6 @@
       <div class="editor-header-left">
         <h2 id="editorName">Adventurer</h2>
         <div class="editor-header-stats">
-          <span class="editor-lvl-badge" id="editorNameLvl">Lvl 1</span>
-          <span style="color:#3a2060">·</span>
           <span class="editor-pts-badge" id="editorNamePts">0 pts</span>
         </div>
         <button id="editNameBtn" class="edit-name-btn">✏️ Edit Name</button>
@@ -1081,6 +1086,7 @@
         </div>
         <div id="editNameMsg"></div>
       </div>
+      <img id="editorLvlImg" class="editor-lvl-img" src="" alt="">
       <button id="closeEditor">✕</button>
     </div>
 
