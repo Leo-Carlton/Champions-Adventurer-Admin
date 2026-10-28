@@ -106,7 +106,7 @@
       if (activeTab === "admin")  renderAdmin();
       if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
       const oppInput = document.getElementById("opponentSearch");
-      if (oppInput && oppInput.value) renderOpponentResults(oppInput.value);
+      if (oppInput && oppInput.value && !selectedOpponent) renderOpponentResults(oppInput.value);
     });
 
     function score(name, q) {
@@ -167,12 +167,16 @@
       const list = document.getElementById("opponentResults");
       if (!q.trim()) { list.innerHTML = ""; return; }
       const results = fuzzySearch(q, selectedPlayer?.id);
-      if (!results.length) {
-        list.innerHTML = `<li class="opp-empty">No adventurers found.</li>`;
-        return;
-      }
+      const typed = cleanName(q);
+      const exists = allPlayers.some(p => p.name.toLowerCase() === typed.toLowerCase());
+      // Offer to enrol the typed name if nobody has exactly that name yet
+      const enrolRow = exists ? "" : `
+        <li class="opp-enrol-row">
+          <span class="opp-enrol-text">Not enrolled? Add <strong>${typed.replace(/</g, "&lt;")}</strong> as a new adventurer</span>
+          <button type="button" class="opp-enrol-btn">＋ Enrol</button>
+        </li>`;
       const sorted = [...allPlayers].sort((a, b) => (b.glory ?? 0) - (a.glory ?? 0));
-      list.innerHTML = results.map(p => {
+      list.innerHTML = (results.length ? "" : `<li class="opp-empty">No adventurers found.</li>`) + results.map(p => {
         const rank = sorted.findIndex(x => x.id === p.id);
         const rankDisplay = rank < 3 ? ["🥇","🥈","🥉"][rank] : rank < 30 ? `#${rank+1}` : "";
         const lvl = calcLevel(p.questPoints ?? 0, p.secretQuest, p.level3Quest);
@@ -180,10 +184,33 @@
           <span class="opp-name">${p.name}</span>
           <span class="opp-meta">Lvl ${lvl} · ${gloryIcon()}${p.glory ?? 0}${rankDisplay ? " · " + rankDisplay : ""}</span>
         </li>`;
-      }).join("");
+      }).join("") + enrolRow;
       list.querySelectorAll(".opp-row").forEach(el => {
         el.addEventListener("click", () => selectOpponent(el.dataset.id));
       });
+      const enrolBtn = list.querySelector(".opp-enrol-btn");
+      if (enrolBtn) enrolBtn.addEventListener("click", () => enrolOpponent(typed, enrolBtn));
+    }
+
+    // Enrol a brand-new adventurer from the glory search and select them as the opponent,
+    // without leaving the current adventurer's Glory tab.
+    async function enrolOpponent(name, btn) {
+      const msg = document.getElementById("editorMsg");
+      btn.disabled = true;
+      btn.textContent = "Enrolling…";
+      try {
+        const newPlayer = await createPlayer(name);
+        if (!allPlayers.some(p => p.id === newPlayer.id)) allPlayers.push(newPlayer);
+        selectOpponent(newPlayer.id);
+        msg.textContent = `✔ "${newPlayer.name}" enrolled.`;
+        msg.style.color = "#66cc66";
+        setTimeout(() => { msg.textContent = ""; }, 2500);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = "＋ Enrol";
+        msg.textContent = e.message;
+        msg.style.color = "#c0392b";
+      }
     }
 
     function hideGloryAward() {
@@ -551,7 +578,10 @@
       const rewards = [];
       for (let l = Math.max(fromLvl + 1, 2); l <= toLvl; l++) {
         if (LEVEL_REWARDS[l]) rewards.push(`<li>${levelIcon(l, "reward-img")}<span>${LEVEL_REWARDS[l]}</span></li>`);
-        if (l === 4) rewards.push(`<li><span class="reward-slot" id="guildRewardSlot">?</span><span>Guild sticker</span></li>`);
+        if (l === 4) {
+          rewards.push(`<li><span class="reward-slot" id="guildRewardSlot">?</span><span>Guild sticker</span></li>`);
+          rewards.push(`<li><span class="reward-slot filled reward-emoji">🃏</span><span>Guild ace card</span></li>`);
+        }
       }
       document.getElementById("levelUpRewards").innerHTML = rewards.join("");
 
@@ -603,27 +633,36 @@
       document.getElementById("levelUpOverlay").classList.add("hidden");
     }
 
+    function cleanName(name) {
+      return name.trim().replace(/\s+/g, " ");
+    }
+
+    // Shared by the Enrol box and the glory-search Enrol button
+    async function createPlayer(rawName) {
+      const name = cleanName(rawName);
+      if (!name) throw new Error("Name can't be empty.");
+      const duplicate = allPlayers.find(p => p.name.toLowerCase() === name.toLowerCase());
+      if (duplicate) throw new Error(`"${duplicate.name}" is already enrolled.`);
+      const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
+      const data = { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false, level3Quest: false };
+      await setDoc(doc(db, "players", id), data);
+      return { id, ...data };
+    }
+
     async function addNewPlayer() {
-      const name = document.getElementById("newPlayerName").value.trim();
+      const name = cleanName(document.getElementById("newPlayerName").value);
       if (!name) return;
       const msg = document.getElementById("addMsg");
-      const duplicate = allPlayers.find(p => p.name.toLowerCase() === name.toLowerCase());
-      if (duplicate) {
-        msg.textContent = `"${duplicate.name}" is already enrolled.`;
-        msg.style.color = "#c0392b";
-        setTimeout(() => { msg.textContent = ""; }, 3000);
-        return;
-      }
-      const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
       try {
-        await setDoc(doc(db, "players", id), { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false, level3Quest: false });
+        await createPlayer(name);
         document.getElementById("newPlayerName").value = "";
         msg.textContent = `✔ "${name}" added (Lvl 1, 0 quest pts).`;
         msg.style.color = "#2a6e2a";
         setTimeout(() => { msg.textContent = ""; }, 3000);
       } catch (e) {
-        msg.textContent = "Error: " + e.message;
+        msg.textContent = e.message;
         msg.style.color = "#c0392b";
+        setTimeout(() => { msg.textContent = ""; }, 3000);
       }
     }
 
@@ -978,7 +1017,11 @@
       document.getElementById("questBtn2").addEventListener("click", () => addQuestPoints(2));
       document.getElementById("questBtn3").addEventListener("click", () => addQuestPoints(3));
 
-      document.getElementById("opponentSearch").addEventListener("input", e => renderOpponentResults(e.target.value));
+      document.getElementById("opponentSearch").addEventListener("input", e => {
+        // Typing again cancels the previously picked opponent
+        if (selectedOpponent) { selectedOpponent = null; hideGloryAward(); }
+        renderOpponentResults(e.target.value);
+      });
       document.getElementById("awardDay1GloryBtn").addEventListener("click", () => awardGlory("awardDay1GloryBtn"));
       document.getElementById("awardGloryBtn").addEventListener("click", () => awardGlory("awardGloryBtn"));
 
@@ -1191,6 +1234,11 @@
     .opp-row:hover { background: #1f0840; }
     .opp-name { font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600; color: #e8d5ff; }
     .opp-meta { font-size: 13px; color: #9980bb; }
+    .opp-enrol-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; background: #10251a; border-top: 1px solid #2a5a3a; }
+    .opp-enrol-text { font-size: 14px; color: #aaddbb; font-style: italic; }
+    .opp-enrol-text strong { font-family: 'Cinzel', serif; font-style: normal; color: #e8ffe8; }
+    .opp-enrol-btn { flex-shrink: 0; padding: 10px 16px; background: linear-gradient(135deg, #44aa44, #228822); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 14px; font-weight: 700; cursor: pointer; letter-spacing: 0.5px; }
+    .opp-enrol-btn:disabled { opacity: 0.6; cursor: wait; }
     .opp-empty { padding: 12px; color: #6655aa; text-align: center; font-style: italic; font-size: 14px; }
 
     #gloryPreview { background: #0d0028; border: 1px solid #ffaa33; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; display: none; }
@@ -1228,6 +1276,7 @@
     .reward-img { height: 40px; width: 40px; object-fit: contain; flex-shrink: 0; }
     .reward-slot { height: 40px; width: 40px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: 2px dashed #7744cc; border-radius: 8px; color: #aa88dd; font-family: 'Cinzel', serif; font-weight: 700; }
     .reward-slot.filled { border: none; }
+    .reward-emoji { font-size: 30px; }
     .rewards-sub { font-family: 'IM Fell English', serif; font-style: italic; font-size: 14px; color: #aa88dd; margin-bottom: 10px; }
     .guild-pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 8px; margin-bottom: 20px; }
     .guild-pick-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; background: #0d0020; border: 2px solid #3a2060; border-radius: 10px; cursor: pointer; color: #aa88dd; font-family: 'Cinzel', serif; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
