@@ -25,6 +25,12 @@
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
     const GUILD_COLORS = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
     const LEVEL_THRESHOLDS = [0, 0, 4, 10, 16];
+    const LEVEL_REWARDS = { 2: "Level 2 sticker", 3: "Level 3 sticker", 4: "Level 4 sticker", 5: "Level 5 sticker" };
+
+    // Image helpers — files sit in the repo root next to this page (names are case-sensitive)
+    const guildIcon = (g, cls = "guild-icon") => `<img src="${g}.png" alt="${g}" title="${g}" class="${cls}">`;
+    const levelIcon = (lvl, cls = "row-lvl-img") => `<img src="Level${lvl}.png" alt="Lvl ${lvl}" title="Level ${lvl}" class="${cls}">`;
+    const gloryIcon = (cls = "glory-icon") => `<img src="Glory.png" alt="Glory" title="Glory" class="${cls}">`;
     const VALID_USERS = ["lando", "red", "rogue", "prism", "neoninja", "glenderella"];
 
     function calcLevel(points, secretQuest) {
@@ -74,6 +80,7 @@
     let activeTab = "search";
     let activeGuildTab = null;
     let selectedOpponent = null;
+    let pendingGuildSticker = null;
 
     onSnapshot(query(playersCol, orderBy("name")), (snap) => {
       allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -113,26 +120,22 @@
       }
       const isPrefix = allPlayers.some(p => p.name.toLowerCase().startsWith(q.trim().toLowerCase()));
       document.getElementById("newPlayerName").value = q.trim() && !isPrefix ? q.trim() : "";
-      const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
-      const guildColors = GUILD_COLORS;
       list.innerHTML = results.map(p => {
         const points = p.questPoints ?? 0;
         const lvl = calcLevel(points, p.secretQuest);
-        const lvlColor = lvlColors[lvl] || "#c8b89a";
         const guild = p.guild && p.guild !== "None" ? p.guild : null;
-        const guildColor = guildColors[guild] || "#9980bb";
         const guildHtml = guild
-          ? `<span style="color:${guildColor}">${guild.toUpperCase()}</span>`
+          ? guildIcon(guild)
           : `<span style="color:#555">NO GUILD</span>`;
         return `
         <li class="player-row" data-id="${p.id}">
           <span class="player-name">${p.name}</span>
           <span class="player-meta-new">
-            <span style="font-size:16px;color:#aa88dd">𝑳𝐕𝑳</span><span style="color:${lvlColor};font-size:22px;font-weight:700">${lvl}</span>
+            ${levelIcon(lvl)}
             <span class="meta-dot">·</span>
             <span style="font-size:20px">📜</span><span style="font-size:18px">${points}pts</span>
             <span class="meta-dot">·</span>
-            <span style="font-size:20px">🔵</span><span style="color:#888;font-size:18px;font-weight:700">${p.glory ?? 0}</span>
+            ${gloryIcon()}<span style="color:#888;font-size:18px;font-weight:700">${p.glory ?? 0}</span>
             <span class="meta-dot">·</span>
             ${guildHtml}
           </span>
@@ -158,7 +161,7 @@
         const lvl = calcLevel(p.questPoints ?? 0, p.secretQuest);
         return `<li class="opp-row" data-id="${p.id}">
           <span class="opp-name">${p.name}</span>
-          <span class="opp-meta">Lvl ${lvl} · ⭐${p.glory ?? 0}${rankDisplay ? " · " + rankDisplay : ""}</span>
+          <span class="opp-meta">Lvl ${lvl} · ${gloryIcon()}${p.glory ?? 0}${rankDisplay ? " · " + rankDisplay : ""}</span>
         </li>`;
       }).join("");
       list.querySelectorAll(".opp-row").forEach(el => {
@@ -363,7 +366,7 @@
         await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: newPoints, glory, guild });
         selectedPlayer.questPoints = newPoints;
         if (newLvl > oldLvl) {
-          showLevelUp(selectedPlayer.name, newLvl);
+          showLevelUp(selectedPlayer.name, oldLvl, newLvl);
         } else {
           msg.textContent = `+${amount} quest pt${amount > 1 ? "s" : ""} added!`;
           msg.style.color = "#66cc66";
@@ -387,7 +390,7 @@
         await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: points, glory, guild });
         selectedPlayer.questPoints = points; selectedPlayer.glory = glory; selectedPlayer.guild = guild;
         if (newLvl > oldLvl) {
-          showLevelUp(selectedPlayer.name, newLvl);
+          showLevelUp(selectedPlayer.name, oldLvl, newLvl);
         } else {
           msg.textContent = "✔ Saved!";
           msg.style.color = "#2a7a2a";
@@ -432,7 +435,7 @@
           sqBtn.textContent = "✔ Secret Quest Complete — Tap to Undo";
           sqBtn.classList.add("sq-done");
           updateLevelDisplay(points, true);
-          showLevelUp(selectedPlayer.name, 5);
+          showLevelUp(selectedPlayer.name, 4, 5);
         } catch (e) {
           msg.textContent = "Error: " + e.message;
           msg.style.color = "#c0392b";
@@ -454,9 +457,67 @@
       }
     }
 
-    function showLevelUp(name, level) {
-      document.getElementById("levelUpText").textContent = `${name} reached Level ${level}!`;
+    // ── Level up popup ──
+    function showLevelUp(name, fromLvl, toLvl) {
+      const img = document.getElementById("levelUpImg");
+      img.src = `Level${toLvl}.png`;
+      img.alt = `Level ${toLvl}`;
+      document.getElementById("levelUpText").textContent = `${name} reached Level ${toLvl}!`;
+
+      // One reward per level gained, so jumping two levels at once lists both
+      const rewards = [];
+      for (let l = Math.max(fromLvl + 1, 2); l <= toLvl; l++) {
+        if (LEVEL_REWARDS[l]) rewards.push(`<li>${levelIcon(l, "reward-img")}<span>${LEVEL_REWARDS[l]}</span></li>`);
+        if (l === 4) rewards.push(`<li><span class="reward-slot" id="guildRewardSlot">?</span><span>Guild sticker</span></li>`);
+      }
+      document.getElementById("levelUpRewards").innerHTML = rewards.join("");
+
+      const needsGuild = fromLvl < 4 && toLvl >= 4;
+      document.getElementById("guildStickerPick").classList.toggle("hidden", !needsGuild);
+      pendingGuildSticker = needsGuild && selectedPlayer?.guild && selectedPlayer.guild !== "None"
+        ? selectedPlayer.guild : null;
+      if (needsGuild) renderGuildStickerOptions();
+
       document.getElementById("levelUpOverlay").classList.remove("hidden");
+    }
+
+    function renderGuildStickerOptions() {
+      const wrap = document.getElementById("guildStickerOptions");
+      wrap.innerHTML = GUILDS.map(g => `
+        <button type="button" class="guild-pick-btn${g === pendingGuildSticker ? " selected" : ""}" data-guild="${g}" style="--gc:${GUILD_COLORS[g]}">
+          ${guildIcon(g, "guild-pick-img")}
+          <span>${g}</span>
+        </button>`).join("");
+      wrap.querySelectorAll(".guild-pick-btn").forEach(btn =>
+        btn.addEventListener("click", () => {
+          pendingGuildSticker = btn.dataset.guild;
+          renderGuildStickerOptions();
+        })
+      );
+      const slot = document.getElementById("guildRewardSlot");
+      if (slot) {
+        slot.innerHTML = pendingGuildSticker ? guildIcon(pendingGuildSticker, "reward-img") : "?";
+        slot.classList.toggle("filled", !!pendingGuildSticker);
+      }
+    }
+
+    // Closes only the popup; the adventurer stays open.
+    // If a guild sticker was picked, it is also saved as their guild.
+    async function closeLevelUp() {
+      const pickVisible = !document.getElementById("guildStickerPick").classList.contains("hidden");
+      if (pickVisible && pendingGuildSticker && selectedPlayer && pendingGuildSticker !== selectedPlayer.guild) {
+        try {
+          await updateDoc(doc(db, "players", selectedPlayer.id), { guild: pendingGuildSticker });
+          selectedPlayer.guild = pendingGuildSticker;
+          document.getElementById("editorGuild").value = pendingGuildSticker;
+        } catch (e) {
+          const msg = document.getElementById("editorMsg");
+          msg.textContent = "Error saving guild: " + e.message;
+          msg.style.color = "#c0392b";
+        }
+      }
+      pendingGuildSticker = null;
+      document.getElementById("levelUpOverlay").classList.add("hidden");
     }
 
     async function addNewPlayer() {
@@ -494,7 +555,7 @@
       tbody.innerHTML = sorted.map((p, i) => {
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         const guildHtml = p.guild && p.guild !== "None"
-          ? `<span style="color:${guildColors[p.guild]||"#9980bb"};font-weight:600">${p.guild}</span>`
+          ? guildIcon(p.guild)
           : `<span style="color:#555">—</span>`;
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
@@ -526,7 +587,7 @@
 
     function renderGuildTable() {
       const tbody = document.getElementById("guildBody");
-      document.getElementById("guildHeader").textContent = activeGuildTab;
+      document.getElementById("guildHeader").innerHTML = `${guildIcon(activeGuildTab, "guild-header-img")}<span>${activeGuildTab}</span>`;
       document.querySelectorAll(".guild-tab-btn").forEach(b =>
         b.classList.toggle("active", b.textContent === activeGuildTab)
       );
@@ -556,6 +617,7 @@
       const cards = GUILDS.map(g => {
         const count = allPlayers.filter(p => p.guild === g).length;
         return `<div class="stat-card" style="border-color:${GUILD_COLORS[g]}">
+          ${guildIcon(g, "stat-guild-img")}
           <div class="stat-num" style="color:${GUILD_COLORS[g]}">${count}</div>
           <div class="stat-label">${g}</div>
         </div>`;
@@ -651,14 +713,7 @@
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
 
-      document.getElementById("levelUpClose").addEventListener("click", () => {
-        document.getElementById("levelUpOverlay").classList.add("hidden");
-        document.getElementById("playerEditor").classList.add("hidden");
-        selectedPlayer = null;
-        switchTab("search");
-        document.getElementById("searchInput").value = "";
-        renderResults("");
-      });
+      document.getElementById("levelUpClose").addEventListener("click", closeLevelUp);
     });
   </script>
 
@@ -854,11 +909,31 @@
 
     /* ── Level up ── */
     #levelUpOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
-    .levelup-card { background: linear-gradient(160deg, #0d0030, #1a0050); border: 3px solid transparent; border-radius: 16px; padding: 40px 32px; text-align: center; max-width: 340px; width: 90%; box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5); position: relative; }
+    .levelup-card { background: linear-gradient(160deg, #0d0030, #1a0050); border: 3px solid transparent; border-radius: 16px; padding: 32px 28px; text-align: center; max-width: 400px; width: 92%; max-height: 92vh; overflow-y: auto; box-shadow: 0 0 60px rgba(255,200,0,0.3), 0 8px 40px rgba(0,0,0,0.5); position: relative; }
     .levelup-card::before { content: ''; position: absolute; inset: 0; border-radius: 14px; padding: 3px; background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
-    .levelup-card .lvl-icon { font-size: 64px; margin-bottom: 12px; }
+    .levelup-card .lvl-img { height: 110px; width: auto; margin-bottom: 10px; }
     .levelup-card h2 { font-family: 'Cinzel Decorative', serif; font-size: 28px; background: linear-gradient(90deg, #ffcc00, #ff9900, #ffee44); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 12px; }
-    #levelUpText { font-family: 'IM Fell English', serif; font-size: 18px; color: #e8d5ff; margin-bottom: 28px; font-style: italic; }
+    #levelUpText { font-family: 'IM Fell English', serif; font-size: 18px; color: #e8d5ff; margin-bottom: 18px; font-style: italic; }
+    .rewards-title { font-family: 'Cinzel', serif; font-size: 13px; font-weight: 700; color: #ffcc44; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; }
+    .rewards-list { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; text-align: left; }
+    .rewards-list li { display: flex; align-items: center; gap: 12px; background: #0d0020; border: 1px solid #3a2060; border-radius: 8px; padding: 8px 12px; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600; color: #e8d5ff; }
+    .reward-img { height: 40px; width: 40px; object-fit: contain; flex-shrink: 0; }
+    .reward-slot { height: 40px; width: 40px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border: 2px dashed #7744cc; border-radius: 8px; color: #aa88dd; font-family: 'Cinzel', serif; font-weight: 700; }
+    .reward-slot.filled { border: none; }
+    .rewards-sub { font-family: 'IM Fell English', serif; font-style: italic; font-size: 14px; color: #aa88dd; margin-bottom: 10px; }
+    .guild-pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 8px; margin-bottom: 20px; }
+    .guild-pick-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; background: #0d0020; border: 2px solid #3a2060; border-radius: 10px; cursor: pointer; color: #aa88dd; font-family: 'Cinzel', serif; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
+    .guild-pick-btn.selected { border-color: var(--gc); color: var(--gc); background: #1a0840; box-shadow: 0 0 12px var(--gc); }
+    .guild-pick-img { height: 40px; width: 40px; object-fit: contain; }
+
+    /* ── Custom images (resize these to taste) ── */
+    .guild-icon { height: 32px; width: auto; vertical-align: middle; }
+    .row-lvl-img { height: 34px; width: auto; vertical-align: middle; }
+    .glory-icon { height: 22px; width: auto; vertical-align: middle; }
+    .opp-meta .glory-icon { height: 16px; }
+    .tab-img { height: 22px; width: auto; display: block; margin: 0 auto; }
+    .guild-header-img { height: 32px; width: auto; vertical-align: middle; margin-right: 8px; }
+    .stat-guild-img { height: 48px; width: auto; margin-bottom: 8px; }
     #levelUpClose { padding: 13px 36px; background: linear-gradient(135deg, #cc9900, #ffcc00); color: #1a0a00; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 16px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
 
     /* ── Tables ── */
@@ -1015,7 +1090,7 @@
         <span class="editor-tab-icon">📜</span>Quests
       </button>
       <button class="editor-tab-btn" data-etab="glory">
-        <span class="editor-tab-icon">⚔️</span>Glory
+        <span class="editor-tab-icon"><img src="Glory.png" alt="" class="tab-img"></span>Glory
       </button>
       <button class="editor-tab-btn" data-etab="guild">
         <span class="editor-tab-icon">🛡️</span>Guild
@@ -1046,7 +1121,7 @@
 
     <!-- Glory Panel -->
     <div class="editor-tab-panel hidden" data-epanel="glory">
-      <div class="panel-title glory-color">⚔️ Glory</div>
+      <div class="panel-title glory-color"><img src="Glory.png" alt="" class="glory-icon"> Glory</div>
       <div class="quest-btn-label" style="color:#6688bb">Award Battle Victory</div>
       <div class="opp-search-wrap">
         <input type="text" id="opponentSearch" placeholder="Search opponent name…" autocomplete="off" autocorrect="off" spellcheck="false">
@@ -1096,9 +1171,15 @@
 
 <div id="levelUpOverlay" class="hidden">
   <div class="levelup-card">
-    <div class="lvl-icon">⚔️</div>
+    <img id="levelUpImg" class="lvl-img" src="" alt="">
     <h2>Level Up!</h2>
     <p id="levelUpText"></p>
+    <div class="rewards-title">Rewards</div>
+    <ul id="levelUpRewards" class="rewards-list"></ul>
+    <div id="guildStickerPick" class="hidden">
+      <div class="rewards-sub">Choose guild sticker (also sets their guild)</div>
+      <div id="guildStickerOptions" class="guild-pick-grid"></div>
+    </div>
     <button id="levelUpClose">Huzzah!</button>
   </div>
 </div>
