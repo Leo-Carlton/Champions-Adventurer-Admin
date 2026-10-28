@@ -33,16 +33,20 @@
     const gloryIcon = (cls = "glory-icon") => `<img src="Glory.png" alt="Glory" title="Glory" class="${cls}">`;
     const VALID_USERS = ["lando", "red", "rogue", "prism", "neoninja", "glenderella"];
 
-    function calcLevel(points, secretQuest) {
-      if (secretQuest && points >= 16) return 5;
-      for (let lvl = 4; lvl >= 1; lvl--) {
-        if (points >= LEVEL_THRESHOLDS[lvl]) return lvl;
-      }
+    // Levels 2–3 come from quest points.
+    // Level 4 comes from completing a Level 3 quest (level3Quest flag).
+    // Level 5 comes from completing the secret quest on top of that.
+    const SECRET_QUEST_POINTS = 5;
+    function calcLevel(points, secretQuest, level3Quest) {
+      if (level3Quest && secretQuest) return 5;
+      if (level3Quest) return 4;
+      if (points >= LEVEL_THRESHOLDS[3]) return 3;
+      if (points >= LEVEL_THRESHOLDS[2]) return 2;
       return 1;
     }
 
     function pointsForNextLevel(level) {
-      if (level >= 4) return null;
+      if (level >= 3) return null;
       return LEVEL_THRESHOLDS[level + 1];
     }
 
@@ -55,8 +59,8 @@
 
     // day1 = true skips the leaderboard (top 30 / top 3) bonuses
     function calcGloryGain(winner, opponent, day1 = false) {
-      const winnerLvl = calcLevel(winner.questPoints ?? 0, winner.secretQuest);
-      const oppLvl = calcLevel(opponent.questPoints ?? 0, opponent.secretQuest);
+      const winnerLvl = calcLevel(winner.questPoints ?? 0, winner.secretQuest, winner.level3Quest);
+      const oppLvl = calcLevel(opponent.questPoints ?? 0, opponent.secretQuest, opponent.level3Quest);
       const oppRank = getGloryRank(opponent.id);
 
       let glory = 1;
@@ -122,7 +126,7 @@
       document.getElementById("newPlayerName").value = q.trim() && !isPrefix ? q.trim() : "";
       list.innerHTML = results.map(p => {
         const points = p.questPoints ?? 0;
-        const lvl = calcLevel(points, p.secretQuest);
+        const lvl = calcLevel(points, p.secretQuest, p.level3Quest);
         const guild = p.guild && p.guild !== "None" ? p.guild : null;
         const guildHtml = guild
           ? guildIcon(guild)
@@ -158,7 +162,7 @@
       list.innerHTML = results.map(p => {
         const rank = sorted.findIndex(x => x.id === p.id);
         const rankDisplay = rank < 3 ? ["🥇","🥈","🥉"][rank] : rank < 30 ? `#${rank+1}` : "";
-        const lvl = calcLevel(p.questPoints ?? 0, p.secretQuest);
+        const lvl = calcLevel(p.questPoints ?? 0, p.secretQuest, p.level3Quest);
         return `<li class="opp-row" data-id="${p.id}">
           <span class="opp-name">${p.name}</span>
           <span class="opp-meta">Lvl ${lvl} · ${gloryIcon()}${p.glory ?? 0}${rankDisplay ? " · " + rankDisplay : ""}</span>
@@ -182,7 +186,7 @@
       document.getElementById("opponentResults").innerHTML = "";
       const std = calcGloryGain(selectedPlayer, selectedOpponent, false);
       const day1 = calcGloryGain(selectedPlayer, selectedOpponent, true);
-      const oppLvl = calcLevel(selectedOpponent.questPoints ?? 0, selectedOpponent.secretQuest);
+      const oppLvl = calcLevel(selectedOpponent.questPoints ?? 0, selectedOpponent.secretQuest, selectedOpponent.level3Quest);
       const oppRank = getGloryRank(selectedOpponent.id);
       document.getElementById("gloryPreview").innerHTML = `
         <div class="glory-preview-name">${selectedOpponent.name} · Lvl ${oppLvl}${oppRank ? " · Rank #" + oppRank : ""}</div>
@@ -234,7 +238,7 @@
     function showEditor() {
       const p = selectedPlayer;
       const points = p.questPoints ?? 0;
-      const lvl = calcLevel(points, p.secretQuest);
+      const lvl = calcLevel(points, p.secretQuest, p.level3Quest);
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
 
       document.getElementById("editorName").textContent = p.name;
@@ -252,18 +256,8 @@
       document.getElementById("opponentResults").innerHTML = "";
       hideGloryAward();
 
-      updateLevelDisplay(points, p.secretQuest);
-
-      const sqBtn = document.getElementById("secretQuestBtn");
-      if (p.secretQuest) {
-        sqBtn.textContent = "✔ Secret Quest Complete — Tap to Undo";
-        sqBtn.classList.add("sq-done");
-        sqBtn.disabled = false;
-      } else {
-        sqBtn.textContent = "🔐 Mark Secret Quest Complete";
-        sqBtn.classList.remove("sq-done");
-        sqBtn.disabled = false;
-      }
+      updateLevelDisplay(points);
+      refreshQuestFlagButtons();
 
       // Switch to first tab
       switchEditorTab("quest");
@@ -319,8 +313,9 @@
       }
     }
 
-    function updateLevelDisplay(points, secretQuest) {
-      const lvl = calcLevel(points, secretQuest);
+    function updateLevelDisplay(points) {
+      const secretQuest = selectedPlayer?.secretQuest;
+      const lvl = calcLevel(points, secretQuest, selectedPlayer?.level3Quest);
       const next = pointsForNextLevel(lvl);
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
       const lvlEl = document.getElementById("levelDisplay");
@@ -328,14 +323,24 @@
 
       // Update next-level callout
       const nextEl = document.getElementById("nextLevelCallout");
-      if (lvl < 4) {
+      if (lvl < 3) {
         const needed = next - points;
         nextEl.innerHTML = `<span class="next-lvl-big">${needed} pt${needed !== 1 ? "s" : ""} to Level ${lvl + 1}</span>`;
-      } else if (lvl === 4 && !secretQuest) {
+      } else if (lvl === 3) {
+        nextEl.innerHTML = `<span class="next-lvl-big">Complete a Level 3 quest for Level 4</span>`;
+      } else if (lvl === 4) {
         nextEl.innerHTML = `<span class="next-lvl-big">Complete secret quest for Level 5</span>`;
       } else {
         nextEl.innerHTML = `<span class="next-lvl-big next-lvl-max">⭐ Max Level Reached</span>`;
       }
+
+      // Lock quest tiers above the adventurer's current level
+      [2, 3].forEach(tier => {
+        const btn = document.getElementById("questBtn" + tier);
+        const locked = lvl < tier;
+        btn.disabled = locked;
+        btn.querySelector(".btn-tier").textContent = locked ? `🔒 Lvl ${tier}+` : `Tier ${tier}`;
+      });
 
       // Update header badge
       if (selectedPlayer) {
@@ -359,18 +364,30 @@
 
     async function addQuestPoints(amount) {
       if (!selectedPlayer) return;
+      const msg = document.getElementById("editorMsg");
+      const p = selectedPlayer;
       const currentPoints = parseInt(document.getElementById("editorPoints").value) || 0;
+      const oldLvl = calcLevel(currentPoints, p.secretQuest, p.level3Quest);
+
+      // Tier N quests need Level N
+      if (amount >= 2 && oldLvl < amount) {
+        msg.textContent = `Adventurer must be Level ${amount} to complete a Level ${amount} quest.`;
+        msg.style.color = "#c0392b";
+        return;
+      }
+
       const newPoints = currentPoints + amount;
-      document.getElementById("editorPoints").value = newPoints;
-      updateLevelDisplay(newPoints, selectedPlayer.secretQuest);
-      const oldLvl = calcLevel(currentPoints, selectedPlayer.secretQuest);
-      const newLvl = calcLevel(newPoints, selectedPlayer.secretQuest);
+      const level3Quest = p.level3Quest || amount === 3;   // first Level 3 quest → Level 4
+      const newLvl = calcLevel(newPoints, p.secretQuest, level3Quest);
       const glory = parseInt(document.getElementById("editorGlory").value) || 0;
       const guild = document.getElementById("editorGuild").value;
-      const msg = document.getElementById("editorMsg");
       try {
-        await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: newPoints, glory, guild });
-        selectedPlayer.questPoints = newPoints;
+        await updateDoc(doc(db, "players", p.id), { questPoints: newPoints, glory, guild, level3Quest: !!level3Quest });
+        p.questPoints = newPoints;
+        p.level3Quest = !!level3Quest;
+        document.getElementById("editorPoints").value = newPoints;
+        updateLevelDisplay(newPoints);
+        refreshQuestFlagButtons();
         if (newLvl > oldLvl) {
           showLevelUp(selectedPlayer.name, oldLvl, newLvl);
         } else {
@@ -390,8 +407,8 @@
       const guild = document.getElementById("editorGuild").value;
       const msg = document.getElementById("editorMsg");
       const oldPoints = selectedPlayer.questPoints ?? 0;
-      const oldLvl = calcLevel(oldPoints, selectedPlayer.secretQuest);
-      const newLvl = calcLevel(points, selectedPlayer.secretQuest);
+      const oldLvl = calcLevel(oldPoints, selectedPlayer.secretQuest, selectedPlayer.level3Quest);
+      const newLvl = calcLevel(points, selectedPlayer.secretQuest, selectedPlayer.level3Quest);
       try {
         await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: points, glory, guild });
         selectedPlayer.questPoints = points; selectedPlayer.glory = glory; selectedPlayer.guild = guild;
@@ -408,20 +425,43 @@
       }
     }
 
-    async function toggleSecretQuest() {
-      const points = parseInt(document.getElementById("editorPoints").value) || selectedPlayer.questPoints || 0;
+    // Buttons in the Other tab that show / undo the quest milestones
+    function refreshQuestFlagButtons() {
+      const p = selectedPlayer;
+      if (!p) return;
       const sqBtn = document.getElementById("secretQuestBtn");
+      if (p.secretQuest) {
+        sqBtn.textContent = `✔ Secret Quest Complete — Tap to Undo (−${SECRET_QUEST_POINTS} pts)`;
+        sqBtn.classList.add("sq-done");
+      } else {
+        sqBtn.textContent = `🔐 Mark Secret Quest Complete (+${SECRET_QUEST_POINTS} pts)`;
+        sqBtn.classList.remove("sq-done");
+      }
+      const l3Btn = document.getElementById("level3QuestBtn");
+      l3Btn.classList.toggle("hidden", !p.level3Quest);
+      l3Btn.textContent = "✔ Level 3 Quest Complete (Lvl 4) — Tap to Undo (−3 pts)";
+    }
+
+    function setPointsAfterFlagChange(points) {
+      selectedPlayer.questPoints = points;
+      document.getElementById("editorPoints").value = points;
+      updateLevelDisplay(points);
+      refreshQuestFlagButtons();
+    }
+
+    async function toggleSecretQuest() {
+      const p = selectedPlayer;
+      const points = parseInt(document.getElementById("editorPoints").value) || p.questPoints || 0;
       const msg = document.getElementById("editorMsg");
 
-      if (selectedPlayer.secretQuest) {
-        // Uncheck it
+      if (p.secretQuest) {
+        // Undo: remove the flag and the points it gave
+        const newPoints = Math.max(0, points - SECRET_QUEST_POINTS);
         try {
-          await updateDoc(doc(db, "players", selectedPlayer.id), { secretQuest: false });
-          selectedPlayer.secretQuest = false;
-          sqBtn.textContent = "🔐 Mark Secret Quest Complete";
-          sqBtn.classList.remove("sq-done");
-          updateLevelDisplay(points, false);
-          msg.textContent = "Secret quest unchecked.";
+          await updateDoc(doc(db, "players", p.id), { secretQuest: false, questPoints: newPoints });
+          p.secretQuest = false;
+          setPointsAfterFlagChange(newPoints);
+          msg.textContent = `Secret quest undone (−${SECRET_QUEST_POINTS} pts).`;
           msg.style.color = "#aa88dd";
           setTimeout(() => { msg.textContent = ""; }, 2000);
         } catch (e) {
@@ -429,23 +469,47 @@
           msg.style.color = "#c0392b";
         }
       } else {
-        // Check it
-        if (points < 16) {
-          msg.textContent = "Adventurer needs 16 quest points before completing the secret quest.";
+        if (!p.level3Quest) {
+          msg.textContent = "Adventurer must be Level 4 (complete a Level 3 quest) before the secret quest.";
           msg.style.color = "#c0392b";
           return;
         }
+        const newPoints = points + SECRET_QUEST_POINTS;
         try {
-          await updateDoc(doc(db, "players", selectedPlayer.id), { secretQuest: true });
-          selectedPlayer.secretQuest = true;
-          sqBtn.textContent = "✔ Secret Quest Complete — Tap to Undo";
-          sqBtn.classList.add("sq-done");
-          updateLevelDisplay(points, true);
-          showLevelUp(selectedPlayer.name, 4, 5);
+          await updateDoc(doc(db, "players", p.id), { secretQuest: true, questPoints: newPoints });
+          p.secretQuest = true;
+          setPointsAfterFlagChange(newPoints);
+          showLevelUp(p.name, 4, 5);
         } catch (e) {
           msg.textContent = "Error: " + e.message;
           msg.style.color = "#c0392b";
         }
+      }
+    }
+
+    // Undo for a mis-tapped first Level 3 quest
+    async function undoLevel3Quest() {
+      const p = selectedPlayer;
+      const msg = document.getElementById("editorMsg");
+      if (!p?.level3Quest) return;
+      if (p.secretQuest) {
+        msg.textContent = "Undo the secret quest first.";
+        msg.style.color = "#c0392b";
+        return;
+      }
+      if (!confirm(`Undo ${p.name}'s Level 3 quest? They drop back to Level 3 and lose 3 pts.`)) return;
+      const points = parseInt(document.getElementById("editorPoints").value) || p.questPoints || 0;
+      const newPoints = Math.max(0, points - 3);
+      try {
+        await updateDoc(doc(db, "players", p.id), { level3Quest: false, questPoints: newPoints });
+        p.level3Quest = false;
+        setPointsAfterFlagChange(newPoints);
+        msg.textContent = "Level 3 quest undone (−3 pts).";
+        msg.style.color = "#aa88dd";
+        setTimeout(() => { msg.textContent = ""; }, 2000);
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#c0392b";
       }
     }
 
@@ -539,7 +603,7 @@
       }
       const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
       try {
-        await setDoc(doc(db, "players", id), { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false });
+        await setDoc(doc(db, "players", id), { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false, level3Quest: false });
         document.getElementById("newPlayerName").value = "";
         msg.textContent = `✔ "${name}" added (Lvl 1, 0 quest pts).`;
         msg.style.color = "#2a6e2a";
@@ -606,7 +670,7 @@
       }
       tbody.innerHTML = members.map((p, i) => {
         const points = p.questPoints ?? 0;
-        const lvl = calcLevel(points, p.secretQuest);
+        const lvl = calcLevel(points, p.secretQuest, p.level3Quest);
         const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
         return `<tr class="${i < 3 ? 'rank-' + (i+1) : ''}">
           <td class="rank">${medal || (i + 1)}</td>
@@ -672,7 +736,7 @@
       document.getElementById("searchInput").addEventListener("input", e => renderResults(e.target.value));
       document.getElementById("editorPoints").addEventListener("input", () => {
         if (!selectedPlayer) return;
-        updateLevelDisplay(parseInt(document.getElementById("editorPoints").value) || 0, selectedPlayer.secretQuest);
+        updateLevelDisplay(parseInt(document.getElementById("editorPoints").value) || 0);
       });
       document.getElementById("closeEditor").addEventListener("click", () => {
         document.getElementById("playerEditor").classList.add("hidden");
@@ -715,6 +779,7 @@
       document.getElementById("saveBtnGlory").addEventListener("click", () => saveAndFlash("saveBtnGlory"));
       document.getElementById("saveBtnGuild").addEventListener("click", () => saveAndFlash("saveBtnGuild"));
       document.getElementById("secretQuestBtn").addEventListener("click", toggleSecretQuest);
+      document.getElementById("level3QuestBtn").addEventListener("click", undoLevel3Quest);
       document.getElementById("deleteBtn").addEventListener("click", deletePlayer);
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
@@ -867,6 +932,8 @@
     .quest-btn { flex: 1; padding: 16px 8px; border: none; border-radius: 10px; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 700; cursor: pointer; color: #fff; transition: filter 0.15s, transform 0.1s; }
     .quest-btn:active { transform: scale(0.96); }
     .quest-btn:hover { filter: brightness(1.15); }
+    .quest-btn:disabled { opacity: 0.35; filter: grayscale(1); cursor: not-allowed; transform: none; }
+    #level3QuestBtn { width: 100%; padding: 14px; background: linear-gradient(135deg, #3a7a3a, #2a6a2a); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600; cursor: pointer; margin-bottom: 12px; letter-spacing: 0.5px; }
     #questBtn1 { background: linear-gradient(135deg, #2255aa, #3377cc); box-shadow: 0 2px 10px rgba(50,100,200,0.4); }
     #questBtn2 { background: linear-gradient(135deg, #aa5500, #cc7722); box-shadow: 0 2px 10px rgba(180,100,20,0.4); }
     #questBtn3 { background: linear-gradient(135deg, #880088, #bb22bb); box-shadow: 0 2px 10px rgba(150,30,150,0.4); }
@@ -976,6 +1043,7 @@
     .login-card { background: linear-gradient(160deg, #110030, #1a0040); border: 2px solid #7744cc; border-radius: 16px; padding: 40px 32px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 0 60px rgba(120,60,255,0.35); position: relative; }
     .login-card::before { content: ""; position: absolute; inset: 0; border-radius: 14px; padding: 2px; background: linear-gradient(135deg, #ff4444, #ff9900, #ffee00, #44cc44, #4488ff, #9944ff); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
     .login-icon { font-size: 56px; margin-bottom: 12px; }
+    .login-img { height: 120px; width: auto; max-width: 100%; }
     .login-title { font-family: "Cinzel Decorative", serif; font-size: 26px; background: linear-gradient(90deg, #ff6666, #ffaa00, #ffee44, #66dd66, #66aaff, #bb66ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 4px; }
     .login-sub { font-family: "IM Fell English", serif; font-style: italic; color: #c8a87a; font-size: 13px; margin-bottom: 28px; letter-spacing: 1px; }
     .login-prompt { font-family: "IM Fell English", serif; font-size: 16px; color: #aa88dd; margin-bottom: 16px; font-style: italic; }
@@ -1009,7 +1077,7 @@
 <div id="loginScreen">
   <div class="login-wrap">
     <div class="login-card">
-      <div class="login-icon">⚔️</div>
+      <div class="login-icon"><img src="Asset%201.png" alt="" class="login-img"></div>
       <h1 class="login-title">Adventurer Log</h1>
       <p class="login-sub">Champions of Woodfordia</p>
       <p class="login-prompt">Enter Login Password to Continue</p>
@@ -1165,6 +1233,7 @@
     <!-- Other Panel -->
     <div class="editor-tab-panel hidden" data-epanel="other">
       <div class="panel-title other-color">⚙️ Other</div>
+      <button id="level3QuestBtn" class="hidden"></button>
       <button id="secretQuestBtn">🔐 Mark Secret Quest Complete</button>
       <br><br>
       <button id="saveBtn">Save All</button>
