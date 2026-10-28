@@ -10,7 +10,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import {
       getFirestore, collection, doc, getDoc,
-      setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy
+      setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -24,7 +24,9 @@
 
     const GUILDS = ["Paladins", "Rogues", "Druids", "Wizards", "Inventors"];
     const GUILD_COLORS = { Paladins: "#ffcc00", Wizards: "#4488ff", Druids: "#44cc44", Rogues: "#ff4444", Inventors: "#bb66ff" };
-    const LEVEL_THRESHOLDS = [0, 0, 4, 10, 16];
+    // Index = level. [2] and [3] are editable in Admin → Quest Point Thresholds (saved in settings/config).
+    const DEFAULT_THRESHOLDS = { 2: 4, 3: 10 };
+    const LEVEL_THRESHOLDS = [0, 0, DEFAULT_THRESHOLDS[2], DEFAULT_THRESHOLDS[3]];
     const LEVEL_REWARDS = { 2: "Level 2 sticker", 3: "Level 3 sticker", 4: "Level 4 sticker", 5: "Level 5 sticker" };
 
     // Image helpers — files sit in the repo root next to this page (names are case-sensitive)
@@ -86,11 +88,22 @@
     let selectedOpponent = null;
     let pendingGuildSticker = null;
 
+    // Live quest point thresholds
+    const settingsRef = doc(db, "settings", "config");
+    onSnapshot(settingsRef, (snap) => {
+      const d = snap.exists() ? snap.data() : {};
+      LEVEL_THRESHOLDS[2] = Number.isInteger(d.level2) ? d.level2 : DEFAULT_THRESHOLDS[2];
+      LEVEL_THRESHOLDS[3] = Number.isInteger(d.level3) ? d.level3 : DEFAULT_THRESHOLDS[3];
+      if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
+      if (activeTab === "admin")  renderAdmin();
+      if (selectedPlayer) updateLevelDisplay(parseInt(document.getElementById("editorPoints").value) || 0);
+    }, (err) => console.warn("Could not read settings/config:", err.message));
+
     onSnapshot(query(playersCol, orderBy("name")), (snap) => {
       allPlayers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (activeTab === "glory")  renderGloryLeaderboard();
       if (activeTab === "guild")  renderGuildLeaderboard();
-      if (activeTab === "stats")  renderStats();
+      if (activeTab === "admin")  renderAdmin();
       if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
       const oppInput = document.getElementById("opponentSearch");
       if (oppInput && oppInput.value) renderOpponentResults(oppInput.value);
@@ -680,26 +693,231 @@
       }).join("");
     }
 
+    // ── Admin settings ──
+    const ADMIN_PASSWORD = "rogue";
+    let adminUnlocked = false;
+    let adminSection = "stats";
+
+    function renderAdmin() {
+      document.getElementById("adminLock").classList.toggle("hidden", adminUnlocked);
+      document.getElementById("adminContent").classList.toggle("hidden", !adminUnlocked);
+      if (!adminUnlocked) return;
+      document.getElementById("adminSelect").value = adminSection;
+      document.querySelectorAll(".admin-section").forEach(sec =>
+        sec.classList.toggle("hidden", sec.dataset.section !== adminSection)
+      );
+      if (adminSection === "stats") renderStats();
+      if (adminSection === "thresholds") renderThresholdForm();
+      if (adminSection === "clear") document.getElementById("clearCount").textContent = allPlayers.length;
+    }
+
+    function unlockAdmin() {
+      const input = document.getElementById("adminPassInput");
+      const err = document.getElementById("adminPassError");
+      if (input.value.trim().toLowerCase() === ADMIN_PASSWORD) {
+        adminUnlocked = true;
+        err.textContent = "";
+        renderAdmin();
+      } else {
+        err.textContent = "Incorrect password.";
+        setTimeout(() => { err.textContent = ""; }, 2500);
+      }
+      input.value = "";
+    }
+
     // ── Stats ──
+    const levelOf = p => calcLevel(p.questPoints ?? 0, p.secretQuest, p.level3Quest);
+
+    function statCard(num, label, color = "#ffcc44", top = "", sub = "") {
+      return `<div class="stat-card" style="border-color:${color}">
+        ${top}
+        <div class="stat-num" style="color:${color}">${num}</div>
+        <div class="stat-label">${label}</div>
+        ${sub ? `<div class="stat-sub">${sub}</div>` : ""}
+      </div>`;
+    }
+
+    // Bar chart of how many adventurers fall in each range of a number field
+    function distribution(key, size) {
+      const vals = allPlayers.map(p => p[key] ?? 0);
+      const max = Math.max(0, ...vals);
+      const buckets = [{ label: "0", count: vals.filter(v => v === 0).length }];
+      for (let lo = 1; lo <= max; lo += size) {
+        const hi = lo + size - 1;
+        buckets.push({ label: size === 1 ? `${lo}` : `${lo}–${hi}`, count: vals.filter(v => v >= lo && v <= hi).length });
+      }
+      const top = Math.max(1, ...buckets.map(b => b.count));
+      return buckets.map(b => `
+        <div class="dist-row">
+          <span class="dist-label">${b.label}</span>
+          <span class="dist-track"><span class="dist-bar" style="width:${(b.count / top) * 100}%"></span></span>
+          <span class="dist-count">${b.count}</span>
+        </div>`).join("");
+    }
+
     function renderStats() {
-      document.getElementById("statTotal").textContent = allPlayers.length;
-      const noGuild = allPlayers.filter(p => !p.guild || p.guild === "None").length;
-      const cards = GUILDS.map(g => {
-        const count = allPlayers.filter(p => p.guild === g).length;
-        return `<div class="stat-card" style="border-color:${GUILD_COLORS[g]}">
-          ${guildIcon(g, "stat-guild-img")}
-          <div class="stat-num" style="color:${GUILD_COLORS[g]}">${count}</div>
-          <div class="stat-label">${g}</div>
-        </div>`;
-      });
-      cards.push(`<div class="stat-card" style="border-color:#555">
-        <div class="stat-num" style="color:#999">${noGuild}</div>
-        <div class="stat-label">No Guild</div>
-      </div>`);
-      document.getElementById("statsGrid").innerHTML = cards.join("");
+      const ps = allPlayers;
+      const n = ps.length;
+      const body = document.getElementById("statsBody");
+      if (!n) { body.innerHTML = `<div class="empty">No adventurers yet.</div>`; return; }
+
+      const sum = key => ps.reduce((t, p) => t + (p[key] ?? 0), 0);
+      const avg = x => (x / n).toFixed(1);
+      const pct = c => Math.round((c / n) * 100) + "%";
+      const topBy = key => ps.reduce((best, p) => ((p[key] ?? 0) > (best[key] ?? 0) ? p : best), ps[0]);
+      const totalPts = sum("questPoints"), totalGlory = sum("glory");
+      const topQ = topBy("questPoints"), topG = topBy("glory");
+
+      // Levels
+      const levelCounts = [0, 0, 0, 0, 0, 0];
+      ps.forEach(p => levelCounts[levelOf(p)]++);
+      const levelCards = [1, 2, 3, 4, 5].map(l =>
+        statCard(levelCounts[l], `Level ${l}`, "#e8a000", levelIcon(l, "stat-lvl-img"), pct(levelCounts[l]))
+      ).join("");
+
+      // Guilds
+      const guildCards = GUILDS.map(g => {
+        const m = ps.filter(p => p.guild === g);
+        const pts = m.reduce((t, p) => t + (p.questPoints ?? 0), 0);
+        const gl = m.reduce((t, p) => t + (p.glory ?? 0), 0);
+        return statCard(m.length, g, GUILD_COLORS[g], guildIcon(g, "stat-guild-img"), `${pts} pts · ${gl} glory`);
+      }).join("");
+      const noGuild = ps.filter(p => !p.guild || p.guild === "None");
+      const unassigned = noGuild.filter(p => levelOf(p) >= 4);
+
+      body.innerHTML = `
+        <div class="stats-total">
+          <div class="stats-total-num">${n}</div>
+          <div class="stats-total-label">Total Adventurers</div>
+        </div>
+
+        <div class="stats-heading">Overview</div>
+        <div class="stats-grid">
+          ${statCard(totalPts, "Quest Pts Awarded")}
+          ${statCard(avg(totalPts), "Avg Quest Pts")}
+          ${statCard(totalGlory, "Glory Awarded", "#66aaff")}
+          ${statCard(avg(totalGlory), "Avg Glory", "#66aaff")}
+          ${statCard(ps.filter(p => p.level3Quest).length, "Level 3 Quests Done", "#cc88ff")}
+          ${statCard(ps.filter(p => p.secretQuest).length, "Secret Quests Done", "#cc88ff")}
+        </div>
+
+        <div class="stats-heading">Leaders</div>
+        <div class="stats-leaders">
+          <div><span>Most quest points</span><strong>${(topQ.questPoints ?? 0) > 0 ? `${topQ.name} · ${topQ.questPoints} pts` : "—"}</strong></div>
+          <div><span>Most glory</span><strong>${(topG.glory ?? 0) > 0 ? `${topG.name} · ${topG.glory} glory` : "—"}</strong></div>
+        </div>
+
+        <div class="stats-heading">Adventurers by Level</div>
+        <div class="stats-grid">${levelCards}</div>
+
+        <div class="stats-heading">Guilds</div>
+        <div class="stats-grid">
+          ${guildCards}
+          ${statCard(noGuild.length, "No Guild", "#999", "", pct(noGuild.length))}
+        </div>
+        ${unassigned.length ? `
+          <div class="stats-alert">
+            ⚠️ <strong>${unassigned.length}</strong> adventurer${unassigned.length > 1 ? "s are" : " is"} Level 4+ with no guild:
+            ${unassigned.slice(0, 15).map(p => p.name).join(", ")}${unassigned.length > 15 ? "…" : ""}
+          </div>` : ""}
+
+        <div class="stats-heading">Glory Distribution</div>
+        <div class="dist">${distribution("glory", 10)}</div>
+
+        <div class="stats-heading">Quest Points Distribution</div>
+        <div class="dist">${distribution("questPoints", 5)}</div>
+      `;
+    }
+
+    // ── Quest point thresholds ──
+    function levelWith(p, t2, t3) {
+      if (p.level3Quest) return p.secretQuest ? 5 : 4;
+      const pts = p.questPoints ?? 0;
+      return pts >= t3 ? 3 : pts >= t2 ? 2 : 1;
+    }
+
+    function renderThresholdForm() {
+      const l2 = document.getElementById("thrL2"), l3 = document.getElementById("thrL3");
+      if (document.activeElement !== l2) l2.value = LEVEL_THRESHOLDS[2];
+      if (document.activeElement !== l3) l3.value = LEVEL_THRESHOLDS[3];
+      updateThresholdPreview();
+    }
+
+    function updateThresholdPreview() {
+      const t2 = parseInt(document.getElementById("thrL2").value);
+      const t3 = parseInt(document.getElementById("thrL3").value);
+      const out = document.getElementById("thrPreview");
+      if (!(t2 > 0 && t3 > t2)) { out.innerHTML = `<span style="color:#ff6655">Level 3 must need more points than Level 2, and both must be above 0.</span>`; return; }
+      const now = [0, 0, 0, 0, 0, 0], next = [0, 0, 0, 0, 0, 0];
+      allPlayers.forEach(p => { now[levelOf(p)]++; next[levelWith(p, t2, t3)]++; });
+      out.innerHTML = `With these values: ` + [1, 2, 3, 4, 5].map(l =>
+        `Lvl ${l}: <strong>${next[l]}</strong>${next[l] !== now[l] ? ` <span style="color:#ffcc44">(now ${now[l]})</span>` : ""}`
+      ).join(" · ");
+    }
+
+    async function saveThresholds(t2, t3) {
+      const msg = document.getElementById("thrMsg");
+      if (!(Number.isInteger(t2) && Number.isInteger(t3) && t2 > 0 && t3 > t2)) {
+        msg.textContent = "Level 3 must need more points than Level 2, and both must be above 0.";
+        msg.style.color = "#ff6655";
+        return;
+      }
+      try {
+        await setDoc(settingsRef, { level2: t2, level3: t3 }, { merge: true });
+        msg.textContent = `✔ Saved — Level 2 at ${t2} pts, Level 3 at ${t3} pts.`;
+        msg.style.color = "#66cc66";
+        setTimeout(() => { msg.textContent = ""; }, 3000);
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#ff6655";
+      }
+    }
+
+    // ── Clear all adventurers ──
+    function downloadBackup() {
+      const blob = new Blob([JSON.stringify(allPlayers, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `adventurers-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    async function clearAllAdventurers() {
+      const input = document.getElementById("clearConfirmInput");
+      const msg = document.getElementById("clearMsg");
+      const btn = document.getElementById("clearAllBtn");
+      if (input.value.trim() !== "DELETE") {
+        msg.textContent = 'Type DELETE (in capitals) to confirm.';
+        msg.style.color = "#ff6655";
+        return;
+      }
+      const count = allPlayers.length;
+      if (!count) { msg.textContent = "There are no adventurers to delete."; msg.style.color = "#aa88dd"; return; }
+      if (!confirm(`Permanently delete all ${count} adventurers? This cannot be undone.`)) return;
+      btn.disabled = true;
+      msg.textContent = "Deleting…";
+      msg.style.color = "#aa88dd";
+      try {
+        const ids = allPlayers.map(p => p.id);
+        for (let i = 0; i < ids.length; i += 450) {          // Firestore batches max out at 500
+          const batch = writeBatch(db);
+          ids.slice(i, i + 450).forEach(id => batch.delete(doc(db, "players", id)));
+          await batch.commit();
+        }
+        input.value = "";
+        msg.textContent = `✔ Deleted ${count} adventurers.`;
+        msg.style.color = "#66cc66";
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#ff6655";
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     function switchTab(tab) {
+      if (tab !== "admin") adminUnlocked = false;   // admin locks again when you leave it
       activeTab = tab;
       document.querySelectorAll(".tab-btn").forEach(b =>
         b.classList.toggle("active", b.dataset.tab === tab)
@@ -709,7 +927,7 @@
       );
       if (tab === "glory")  renderGloryLeaderboard();
       if (tab === "guild")  renderGuildLeaderboard();
-      if (tab === "stats")  renderStats();
+      if (tab === "admin")  renderAdmin();
       if (tab === "search") renderResults(document.getElementById("searchInput").value);
     }
 
@@ -780,6 +998,23 @@
       document.getElementById("saveBtnGuild").addEventListener("click", () => saveAndFlash("saveBtnGuild"));
       document.getElementById("secretQuestBtn").addEventListener("click", toggleSecretQuest);
       document.getElementById("level3QuestBtn").addEventListener("click", undoLevel3Quest);
+
+      // Admin
+      document.getElementById("adminPassBtn").addEventListener("click", unlockAdmin);
+      document.getElementById("adminPassInput").addEventListener("keydown", e => { if (e.key === "Enter") unlockAdmin(); });
+      document.getElementById("adminLockBtn").addEventListener("click", () => { adminUnlocked = false; renderAdmin(); });
+      document.getElementById("adminSelect").addEventListener("change", e => { adminSection = e.target.value; renderAdmin(); });
+      document.getElementById("thrL2").addEventListener("input", updateThresholdPreview);
+      document.getElementById("thrL3").addEventListener("input", updateThresholdPreview);
+      document.getElementById("thrSaveBtn").addEventListener("click", () =>
+        saveThresholds(parseInt(document.getElementById("thrL2").value), parseInt(document.getElementById("thrL3").value)));
+      document.getElementById("thrResetBtn").addEventListener("click", () => {
+        document.getElementById("thrL2").value = DEFAULT_THRESHOLDS[2];
+        document.getElementById("thrL3").value = DEFAULT_THRESHOLDS[3];
+        saveThresholds(DEFAULT_THRESHOLDS[2], DEFAULT_THRESHOLDS[3]);
+      });
+      document.getElementById("backupBtn").addEventListener("click", downloadBackup);
+      document.getElementById("clearAllBtn").addEventListener("click", clearAllAdventurers);
       document.getElementById("deleteBtn").addEventListener("click", deletePlayer);
       document.getElementById("addPlayerBtn").addEventListener("click", addNewPlayer);
       document.getElementById("newPlayerName").addEventListener("keydown", e => { if (e.key === "Enter") addNewPlayer(); });
@@ -1037,6 +1272,37 @@
     .stat-card { background: #0d0020; border: 2px solid; border-radius: 10px; padding: 16px; text-align: center; }
     .stat-num { font-family: 'Cinzel', serif; font-size: 32px; font-weight: 700; line-height: 1; }
     .stat-label { font-family: 'Cinzel', serif; font-size: 12px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
+    .stat-sub { font-size: 13px; color: #8877aa; margin-top: 4px; font-style: italic; }
+    .stat-lvl-img { height: 56px; width: auto; margin-bottom: 8px; }
+    .stats-heading { font-family: 'Cinzel Decorative', serif; font-size: 15px; color: #cc99ff; margin: 26px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #3a1a70; }
+    .stats-leaders { display: flex; flex-direction: column; gap: 8px; }
+    .stats-leaders div { display: flex; justify-content: space-between; gap: 12px; background: #0d0020; border: 1px solid #3a2060; border-radius: 8px; padding: 12px 14px; }
+    .stats-leaders span { color: #aa88dd; font-style: italic; }
+    .stats-leaders strong { font-family: 'Cinzel', serif; color: #ffcc44; text-align: right; }
+    .stats-alert { margin-top: 12px; background: rgba(255,170,0,0.08); border: 1px solid #aa7700; border-radius: 8px; padding: 12px 14px; color: #ffdd88; font-size: 15px; line-height: 1.5; }
+    .dist { display: flex; flex-direction: column; gap: 6px; }
+    .dist-row { display: grid; grid-template-columns: 64px 1fr 36px; align-items: center; gap: 10px; }
+    .dist-label { font-family: 'Cinzel', serif; font-size: 13px; color: #aa88dd; text-align: right; }
+    .dist-track { background: #0d0020; border: 1px solid #2a1050; border-radius: 4px; height: 20px; overflow: hidden; }
+    .dist-bar { display: block; height: 100%; background: linear-gradient(90deg, #5533aa, #aa66ff); border-radius: 3px; }
+    .dist-count { font-family: 'Cinzel', serif; font-weight: 700; color: #ffcc44; }
+
+    /* ── Admin ── */
+    .tab-btn.tab-cog { font-size: 20px; padding: 10px 16px; }
+    .admin-lock { max-width: 360px; margin: 30px auto; text-align: center; }
+    .admin-lock-icon { font-size: 48px; margin-bottom: 8px; }
+    .admin-lock-title { font-family: 'Cinzel Decorative', serif; font-size: 22px; color: #cc99ff; margin-bottom: 18px; }
+    .admin-bar { display: flex; gap: 10px; margin-bottom: 16px; }
+    .admin-select { flex: 1; padding: 14px 16px; font-family: 'Cinzel', serif; font-size: 16px; font-weight: 600; background: #0d0020; color: #f0e6d3; border: 2px solid #7744cc; border-radius: 8px; outline: none; }
+    .admin-select option { background: #1a0040; }
+    .admin-lock-btn { padding: 14px 16px; background: transparent; border: 2px solid #5533aa; border-radius: 8px; color: #aa88dd; font-family: 'Cinzel', serif; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .admin-card { background: #0d0020; border: 2px solid #5533aa; border-radius: 12px; padding: 20px; }
+    .admin-card.admin-danger { border-color: #aa3322; }
+    .admin-card-title { font-family: 'Cinzel Decorative', serif; font-size: 18px; color: #cc99ff; margin-bottom: 10px; }
+    .admin-note { color: #aa99cc; font-size: 15px; line-height: 1.5; margin-bottom: 16px; }
+    .admin-secondary-btn { width: 100%; padding: 14px; margin: 10px 0; background: transparent; border: 2px solid #5533aa; border-radius: 8px; color: #cc99ff; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .danger-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, #8a1a1a, #c0392b); color: #fff; border: none; border-radius: 8px; font-family: 'Cinzel', serif; font-size: 17px; font-weight: 700; cursor: pointer; letter-spacing: 0.5px; }
+    .danger-btn:disabled { opacity: 0.5; cursor: wait; }
 
     /* ── Login ── */
     #loginScreen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #0d0020 0%, #1a0050 50%, #0d0020 100%); padding: 24px; }
@@ -1098,7 +1364,7 @@
   <button class="tab-btn active" data-tab="search">Players</button>
   <button class="tab-btn" data-tab="glory">Glory Board</button>
   <button class="tab-btn" data-tab="guild">Guild Board</button>
-  <button class="tab-btn tab-minor" data-tab="stats">Stats</button>
+  <button class="tab-btn tab-minor tab-cog" data-tab="admin" title="Admin settings">⚙️</button>
 </div>
 
 <div class="tab-panel" id="tab-search">
@@ -1127,12 +1393,54 @@
   </table>
 </div>
 
-<div class="tab-panel hidden" id="tab-stats">
-  <div class="stats-total">
-    <div class="stats-total-num" id="statTotal">0</div>
-    <div class="stats-total-label">Total Adventurers</div>
+<div class="tab-panel hidden" id="tab-admin">
+  <div id="adminLock" class="admin-lock">
+    <div class="admin-lock-icon">⚙️</div>
+    <div class="admin-lock-title">Admin Settings</div>
+    <input type="password" id="adminPassInput" class="login-input" placeholder="Admin password…" autocomplete="off">
+    <button id="adminPassBtn" class="login-btn">Unlock</button>
+    <div id="adminPassError" class="login-error"></div>
   </div>
-  <div class="stats-grid" id="statsGrid"></div>
+
+  <div id="adminContent" class="hidden">
+    <div class="admin-bar">
+      <select id="adminSelect" class="admin-select">
+        <option value="stats">📊 Stats</option>
+        <option value="thresholds">📈 Quest Point Thresholds</option>
+        <option value="clear">🗑 Clear All Adventurers</option>
+      </select>
+      <button id="adminLockBtn" class="admin-lock-btn">🔒 Lock</button>
+    </div>
+
+    <div class="admin-section" data-section="stats">
+      <div id="statsBody"></div>
+    </div>
+
+    <div class="admin-section hidden" data-section="thresholds">
+      <div class="admin-card">
+        <div class="admin-card-title">Quest Point Thresholds</div>
+        <p class="admin-note">Total quest points needed to reach Levels 2 and 3. Level 4 still comes from completing a Level 3 quest, and Level 5 from the secret quest.</p>
+        <div class="field"><label>Level 2 at (pts)</label><input type="number" id="thrL2" min="1"></div>
+        <div class="field"><label>Level 3 at (pts)</label><input type="number" id="thrL3" min="2"></div>
+        <div id="thrPreview" class="admin-note"></div>
+        <button id="thrSaveBtn" class="tab-save-btn">Save Thresholds</button>
+        <button id="thrResetBtn" class="admin-secondary-btn">Reset to Defaults (4 / 10)</button>
+        <div id="thrMsg" class="tab-save-msg"></div>
+      </div>
+    </div>
+
+    <div class="admin-section hidden" data-section="clear">
+      <div class="admin-card admin-danger">
+        <div class="admin-card-title" style="color:#ff6655">Clear All Adventurers</div>
+        <p class="admin-note">Permanently deletes all <strong id="clearCount">0</strong> adventurers. This cannot be undone.</p>
+        <button id="backupBtn" class="admin-secondary-btn">⬇ Download Backup First</button>
+        <div class="field"><label>Type DELETE to confirm</label><input type="text" id="clearConfirmInput" autocomplete="off" autocorrect="off" spellcheck="false"></div>
+        <button id="clearAllBtn" class="danger-btn">🗑 Delete All Adventurers</button>
+        <div id="clearMsg" class="tab-save-msg"></div>
+      </div>
+    </div>
+  </div>
+</div>
 </div>
 
 <!-- Player Editor Modal -->
