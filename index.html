@@ -10,7 +10,8 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import {
       getFirestore, collection, doc, getDoc,
-      setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, writeBatch
+      setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, writeBatch,
+      addDoc, limit, increment
     } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -47,6 +48,19 @@
       if (points >= LEVEL_THRESHOLDS[3]) return 3;
       if (points >= LEVEL_THRESHOLDS[2]) return 2;
       return 1;
+    }
+    const levelOf = p => calcLevel(p.questPoints ?? 0, p.secretQuest, p.level3Quest);
+
+    // Escape text before putting it into HTML (names can contain anything)
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    // ── "Confirmed" pop-up: shows, then fades away after ~1 second ──
+    function showToast(text = "✔ Confirmed") {
+      const t = document.getElementById("toast");
+      t.textContent = text;
+      t.classList.remove("show");
+      void t.offsetWidth;            // restart the animation on rapid clicks
+      t.classList.add("show");
     }
 
     function pointsForNextLevel(level) {
@@ -90,6 +104,61 @@
     let selectedOpponent = null;
     let pendingGuildSticker = null;
 
+    // ── Action log (Firestore collection "log") ──
+    const logCol = collection(db, "log");
+    const LOG_LIMIT = 2000;          // newest entries kept in view
+    let allLog = [];
+
+    // Fire-and-forget: a log failure never blocks the actual action
+    let lastLogAt = 0;
+    function logAction(text, player = null, type = "info") {
+      lastLogAt = Math.max(Date.now(), lastLogAt + 1);   // keeps same-moment entries in order
+      addDoc(logCol, {
+        text, type,
+        playerId: player?.id ?? null,
+        playerName: player?.name ?? null,
+        at: lastLogAt
+      }).catch(e => console.warn("Log write failed:", e.message));
+    }
+
+    onSnapshot(query(logCol, orderBy("at", "desc"), limit(LOG_LIMIT)), (snap) => {
+      allLog = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (activeTab === "log") renderLog();
+    }, (err) => {
+      console.warn("Could not read log:", err.message);
+      const list = document.getElementById("logList");
+      if (list) list.innerHTML = `<li class="empty">Couldn't read the log — check your Firestore rules allow the "log" collection.</li>`;
+    });
+
+    const fmtTime = ms => new Date(ms).toLocaleString("en-AU", {
+      weekday: "short", day: "numeric", month: "short",
+      hour: "2-digit", minute: "2-digit", second: "2-digit"
+    });
+
+    function renderLog() {
+      const list = document.getElementById("logList");
+      const q = document.getElementById("logSearch").value.trim().toLowerCase();
+      const words = q ? q.split(/\s+/) : [];
+      const matches = allLog.filter(e => {
+        if (!words.length) return true;
+        const hay = `${e.text} ${e.type} ${fmtTime(e.at)}`.toLowerCase();
+        return words.every(w => hay.includes(w));
+      });
+      const shown = matches.slice(0, 300);
+      document.getElementById("logCount").textContent = words.length
+        ? `${matches.length} matching entr${matches.length === 1 ? "y" : "ies"}${matches.length > shown.length ? ` (showing newest ${shown.length})` : ""}`
+        : `${allLog.length} entr${allLog.length === 1 ? "y" : "ies"}${allLog.length > shown.length ? ` (showing newest ${shown.length})` : ""}`;
+      if (!shown.length) {
+        list.innerHTML = `<li class="empty">${allLog.length ? "No log entries match." : "Nothing logged yet."}</li>`;
+        return;
+      }
+      list.innerHTML = shown.map(e => `
+        <li class="log-row log-${esc(e.type)}">
+          <span class="log-time">${fmtTime(e.at)}</span>
+          <span class="log-text">${esc(e.text)}</span>
+        </li>`).join("");
+    }
+
     // Live quest point thresholds
     const settingsRef = doc(db, "settings", "config");
     onSnapshot(settingsRef, (snap) => {
@@ -98,7 +167,7 @@
       LEVEL_THRESHOLDS[3] = Number.isInteger(d.level3) ? d.level3 : DEFAULT_THRESHOLDS[3];
       if (activeTab === "search") renderResults(document.getElementById("searchInput").value);
       if (activeTab === "admin")  renderAdmin();
-      if (selectedPlayer) updateLevelDisplay(parseInt(document.getElementById("editorPoints").value) || 0);
+      if (selectedPlayer) updateLevelDisplay();
     }, (err) => console.warn("Could not read settings/config:", err.message));
 
     onSnapshot(query(playersCol, orderBy("name")), (snap) => {
@@ -259,6 +328,9 @@
       try {
         await updateDoc(doc(db, "players", selectedPlayer.id), { glory: newGlory });
         selectedPlayer.glory = newGlory;
+        const day1 = btnId === "awardDay1GloryBtn";
+        logAction(`${selectedPlayer.name} beat ${selectedOpponent.name} (+${amount} glory${day1 ? ", Day 1" : ""} → ${newGlory})`, selectedPlayer, "glory");
+        showToast();
         selectedOpponent = null;
         document.getElementById("opponentSearch").value = "";
         hideGloryAward();
@@ -286,10 +358,11 @@
       document.getElementById("editorName").textContent = p.name;
       setEditorLevelImg(lvl);
       document.getElementById("editorNamePts").textContent = `${points} pts`;
-      document.getElementById("editorPoints").value = points;
+      syncQuestFields(p);
       document.getElementById("editorGlory").value = p.glory ?? 0;
       document.getElementById("editorGuild").value = p.guild || "None";
       document.getElementById("editorMsg").textContent = "";
+      document.querySelectorAll(".tab-save-msg").forEach(m => { m.textContent = ""; });
 
       closeEditName();
 
@@ -298,7 +371,8 @@
       document.getElementById("opponentResults").innerHTML = "";
       hideGloryAward();
 
-      updateLevelDisplay(points);
+      renderReaper();
+      updateLevelDisplay();
 
       // Switch to first tab
       switchEditorTab("quest");
@@ -342,6 +416,7 @@
       }
       try {
         await updateDoc(doc(db, "players", selectedPlayer.id), { name: newName });
+        logAction(`${selectedPlayer.name} renamed to ${newName}`, { id: selectedPlayer.id, name: newName }, "edit");
         selectedPlayer.name = newName;
         document.getElementById("editorName").textContent = newName;
         closeEditName();
@@ -354,13 +429,46 @@
       }
     }
 
-    function updateLevelDisplay(points) {
-      const secretQuest = selectedPlayer?.secretQuest;
-      const lvl = calcLevel(points, secretQuest, selectedPlayer?.level3Quest);
+    // Put the saved quest state into the Quests tab fields
+    function syncQuestFields(p) {
+      document.getElementById("editorPoints").value = p.questPoints ?? 0;
+      document.getElementById("editorL3Quest").checked = !!p.level3Quest;
+      document.getElementById("editorSecretCount").value = secretCount(p);
+    }
+
+    // Read the Quests tab fields and apply the level rules:
+    //  - below the Level 3 threshold → Level 3 quest + secret quests are cleared (drops below Lvl 4)
+    //  - no Level 3 quest → no secret quests (Lvl 5 needs Lvl 4)
+    function readQuestForm() {
+      const points = Math.max(0, parseInt(document.getElementById("editorPoints").value) || 0);
+      let level3Quest = document.getElementById("editorL3Quest").checked;
+      let secretN = Math.max(0, parseInt(document.getElementById("editorSecretCount").value) || 0);
+      let reverted = false;
+      if (points < LEVEL_THRESHOLDS[3] && (level3Quest || secretN > 0)) {
+        level3Quest = false; secretN = 0; reverted = true;
+      }
+      if (!level3Quest && secretN > 0) { secretN = 0; reverted = true; }
+      const secretQuest = secretN > 0;
+      return { points, level3Quest, secretN, secretQuest, reverted, level: calcLevel(points, secretQuest, level3Quest) };
+    }
+
+    function updateLevelDisplay() {
+      const f = readQuestForm();
+      const points = f.points;
+      const lvl = f.level;
+      const savedLvl = selectedPlayer ? levelOf(selectedPlayer) : lvl;
       const next = pointsForNextLevel(lvl);
       const lvlColors = { 1: "#c8b89a", 2: "#d4a843", 3: "#c8921a", 4: "#e8a000", 5: "#ffd700" };
       const lvlEl = document.getElementById("levelDisplay");
-      lvlEl.innerHTML = `Level <strong style="color:${lvlColors[lvl]}">${lvl}</strong>`;
+      lvlEl.innerHTML = `Level <strong style="color:${lvlColors[lvl]}">${lvl}</strong>` +
+        (lvl !== savedLvl ? ` <span class="lvl-pending">(currently ${savedLvl} — press Confirm)</span>` : "");
+
+      // Warn what Confirm will undo
+      const notes = [];
+      if (f.reverted) notes.push("⚠ Level 3 quest / secret quests will be cleared (below Level 3 threshold or no Level 3 quest).");
+      const guild = document.getElementById("editorGuild").value;
+      if (savedLvl >= 4 && lvl < 4 && guild !== "None") notes.push(`⚠ Dropping below Level 4 will remove their ${guild} guild.`);
+      document.getElementById("revertNote").innerHTML = notes.join("<br>");
 
       // Update next-level callout
       const nextEl = document.getElementById("nextLevelCallout");
@@ -378,21 +486,21 @@
       // Lock quest tiers above the adventurer's current level
       [2, 3].forEach(tier => {
         const btn = document.getElementById("questBtn" + tier);
-        const locked = lvl < tier;
+        const locked = savedLvl < tier;   // quick-add buttons work from the saved level
         btn.disabled = locked;
         btn.querySelector(".btn-tier").textContent = locked ? `🔒 Lvl ${tier}+` : `Tier ${tier}`;
       });
       const sqBtn = document.getElementById("secretQuestBtn");
       const done = selectedPlayer ? secretCount(selectedPlayer) : 0;
-      sqBtn.disabled = lvl < 4;
-      sqBtn.querySelector(".btn-tier").textContent = lvl < 4
+      sqBtn.disabled = savedLvl < 4;
+      sqBtn.querySelector(".btn-tier").textContent = savedLvl < 4
         ? "🔒 Secret Quest · Lvl 4+"
         : `Secret Quest${done ? ` · completed ${done}×` : " · first one grants Level 5"}`;
 
-      // Update header badge
+      // Header badge shows the saved state
       if (selectedPlayer) {
-        setEditorLevelImg(lvl);
-        document.getElementById("editorNamePts").textContent = `${points} pts`;
+        setEditorLevelImg(savedLvl);
+        document.getElementById("editorNamePts").textContent = `${selectedPlayer.questPoints ?? 0} pts`;
       }
     }
 
@@ -409,12 +517,13 @@
       document.querySelectorAll(".editor-tab-panel").forEach(p => p.classList.toggle("hidden", p.dataset.epanel !== tab));
     }
 
+    // Quick-add buttons work from the adventurer's SAVED state (unconfirmed edits in the fields are replaced)
     async function addQuestPoints(amount) {
-      if (!selectedPlayer) return;
-      const msg = document.getElementById("editorMsg");
       const p = selectedPlayer;
-      const currentPoints = parseInt(document.getElementById("editorPoints").value) || 0;
-      const oldLvl = calcLevel(currentPoints, p.secretQuest, p.level3Quest);
+      if (!p) return;
+      const msg = document.getElementById("editorMsg");
+      const oldPoints = p.questPoints ?? 0;
+      const oldLvl = levelOf(p);
 
       // Tier N quests need Level N
       if (amount >= 2 && oldLvl < amount) {
@@ -423,19 +532,20 @@
         return;
       }
 
-      const newPoints = currentPoints + amount;
-      const level3Quest = p.level3Quest || amount === 3;   // first Level 3 quest → Level 4
+      const newPoints = oldPoints + amount;
+      const level3Quest = !!p.level3Quest || amount === 3;   // first Level 3 quest → Level 4
       const newLvl = calcLevel(newPoints, p.secretQuest, level3Quest);
-      const glory = parseInt(document.getElementById("editorGlory").value) || 0;
-      const guild = document.getElementById("editorGuild").value;
       try {
-        await updateDoc(doc(db, "players", p.id), { questPoints: newPoints, glory, guild, level3Quest: !!level3Quest });
+        await updateDoc(doc(db, "players", p.id), { questPoints: newPoints, level3Quest });
         p.questPoints = newPoints;
-        p.level3Quest = !!level3Quest;
-        document.getElementById("editorPoints").value = newPoints;
-        updateLevelDisplay(newPoints);
-          if (newLvl > oldLvl) {
-          showLevelUp(selectedPlayer.name, oldLvl, newLvl);
+        p.level3Quest = level3Quest;
+        syncQuestFields(p);
+        updateLevelDisplay();
+        showToast();
+        logAction(`${p.name} completed a Level ${amount} quest (+${amount} pt${amount > 1 ? "s" : ""} → ${newPoints} pt${newPoints === 1 ? "" : "s"})`, p, "quest");
+        if (newLvl > oldLvl) {
+          logAction(`${p.name} levelled up to Lvl ${newLvl}`, p, "level");
+          showLevelUp(p.name, oldLvl, newLvl);
         } else {
           msg.textContent = `+${amount} quest pt${amount > 1 ? "s" : ""} added!`;
           msg.style.color = "#66cc66";
@@ -447,27 +557,74 @@
       }
     }
 
-    async function savePlayer() {
-      const points = parseInt(document.getElementById("editorPoints").value) || 0;
-      const glory = parseInt(document.getElementById("editorGlory").value) || 0;
-      const guild = document.getElementById("editorGuild").value;
-      const msg = document.getElementById("editorMsg");
-      const oldPoints = selectedPlayer.questPoints ?? 0;
-      const oldLvl = calcLevel(oldPoints, selectedPlayer.secretQuest, selectedPlayer.level3Quest);
-      const newLvl = calcLevel(points, selectedPlayer.secretQuest, selectedPlayer.level3Quest);
+    // Confirm button: saves whatever was typed into the fields and re-works out the level.
+    // Levels go down as well as up; dropping below Level 4 strips the guild.
+    async function confirmChanges(btn) {
+      const p = selectedPlayer;
+      if (!p) return;
+      const flash = (text, color) => {
+        const m = btn.nextElementSibling;
+        m.textContent = text; m.style.color = color;
+        setTimeout(() => { m.textContent = ""; }, 2500);
+      };
+      const f = readQuestForm();
+      const glory = Math.max(0, parseInt(document.getElementById("editorGlory").value) || 0);
+      let guild = document.getElementById("editorGuild").value;
+
+      const old = {
+        points: p.questPoints ?? 0, glory: p.glory ?? 0, guild: p.guild || "None",
+        l3: !!p.level3Quest, secret: secretCount(p), lvl: levelOf(p)
+      };
+      const newLvl = f.level;
+
+      let strippedGuild = null;
+      if (old.lvl >= 4 && newLvl < 4 && guild !== "None") { strippedGuild = guild; guild = "None"; }
+
+      const changes = [];
+      if (f.points !== old.points) changes.push(`quest pts ${old.points} → ${f.points}`);
+      if (f.level3Quest !== old.l3) changes.push(`Level 3 quest ${f.level3Quest ? "ticked" : "unticked"}`);
+      if (f.secretN !== old.secret) changes.push(`secret quests ${old.secret} → ${f.secretN}`);
+      if (glory !== old.glory) changes.push(`glory ${old.glory} → ${glory}`);
+      if (guild !== old.guild && !strippedGuild) changes.push(`guild ${old.guild} → ${guild}`);
+
+      if (!changes.length && !strippedGuild) {
+        syncQuestFields(p);
+        document.getElementById("editorGlory").value = old.glory;
+        updateLevelDisplay();
+        flash("No changes to confirm.", "#aa88dd");
+        return;
+      }
+
       try {
-        await updateDoc(doc(db, "players", selectedPlayer.id), { questPoints: points, glory, guild });
-        selectedPlayer.questPoints = points; selectedPlayer.glory = glory; selectedPlayer.guild = guild;
-        if (newLvl > oldLvl) {
-          showLevelUp(selectedPlayer.name, oldLvl, newLvl);
+        await updateDoc(doc(db, "players", p.id), {
+          questPoints: f.points, glory, guild,
+          level3Quest: f.level3Quest, secretQuest: f.secretQuest, secretQuestCount: f.secretN
+        });
+        Object.assign(p, {
+          questPoints: f.points, glory, guild,
+          level3Quest: f.level3Quest, secretQuest: f.secretQuest, secretQuestCount: f.secretN
+        });
+        syncQuestFields(p);
+        document.getElementById("editorGlory").value = glory;
+        document.getElementById("editorGuild").value = guild;
+        updateLevelDisplay();
+        showToast();
+
+        if (changes.length) logAction(`${p.name} manually changed: ${changes.join(", ")}`, p, "edit");
+        if (newLvl < old.lvl) logAction(`${p.name} reverted from Lvl ${old.lvl} to Lvl ${newLvl}`, p, "level");
+        if (strippedGuild) logAction(`${p.name} lost the ${strippedGuild} guild (dropped below Lvl 4)`, p, "guild");
+
+        if (newLvl > old.lvl) {
+          logAction(`${p.name} levelled up to Lvl ${newLvl}`, p, "level");
+          showLevelUp(p.name, old.lvl, newLvl);
+          flash("✔ Confirmed", "#66cc66");
+        } else if (newLvl < old.lvl) {
+          flash(`✔ Confirmed — now Level ${newLvl}${strippedGuild ? `, ${strippedGuild} guild removed` : ""}`, "#ffaa44");
         } else {
-          msg.textContent = "✔ Saved!";
-          msg.style.color = "#2a7a2a";
-          setTimeout(() => { msg.textContent = ""; }, 2000);
+          flash("✔ Confirmed", "#66cc66");
         }
       } catch (e) {
-        msg.textContent = "Error: " + e.message;
-        msg.style.color = "#c0392b";
+        flash("Error: " + e.message, "#c0392b");
       }
     }
 
@@ -479,8 +636,8 @@
       const p = selectedPlayer;
       if (!p) return;
       const msg = document.getElementById("editorMsg");
-      const points = parseInt(document.getElementById("editorPoints").value) || 0;
-      const oldLvl = calcLevel(points, p.secretQuest, p.level3Quest);
+      const points = p.questPoints ?? 0;
+      const oldLvl = levelOf(p);
       if (oldLvl < 4) {
         msg.textContent = "Adventurer must be Level 4 (complete a Level 3 quest) before a secret quest.";
         msg.style.color = "#c0392b";
@@ -488,16 +645,17 @@
       }
       const newPoints = points + SECRET_QUEST_POINTS;
       const count = secretCount(p) + 1;
-      const glory = parseInt(document.getElementById("editorGlory").value) || 0;
-      const guild = document.getElementById("editorGuild").value;
       try {
-        await updateDoc(doc(db, "players", p.id), { questPoints: newPoints, secretQuest: true, secretQuestCount: count, glory, guild });
+        await updateDoc(doc(db, "players", p.id), { questPoints: newPoints, secretQuest: true, secretQuestCount: count });
         p.questPoints = newPoints;
         p.secretQuest = true;
         p.secretQuestCount = count;
-        document.getElementById("editorPoints").value = newPoints;
-        updateLevelDisplay(newPoints);
+        syncQuestFields(p);
+        updateLevelDisplay();
+        showToast();
+        logAction(`${p.name} completed secret quest #${count} (+${SECRET_QUEST_POINTS} pts → ${newPoints} pts)`, p, "quest");
         if (oldLvl < 5) {
+          logAction(`${p.name} levelled up to Lvl 5`, p, "level");
           showLevelUp(p.name, oldLvl, 5);
         } else {
           msg.textContent = `+${SECRET_QUEST_POINTS} pts — secret quest #${count} complete!`;
@@ -510,12 +668,41 @@
       }
     }
 
+    // ── Reaper: heartless counter ──
+    function renderReaper() {
+      const n = selectedPlayer?.heartlessCount ?? 0;
+      document.getElementById("heartlessCount").textContent = n;
+      document.getElementById("heartlessTimes").textContent = n === 1 ? "time" : "times";
+      document.getElementById("heartlessUndoBtn").disabled = n <= 0;
+    }
+
+    async function changeHeartless(delta) {
+      const p = selectedPlayer;
+      if (!p) return;
+      const cur = p.heartlessCount ?? 0;
+      if (cur + delta < 0) return;
+      const msg = document.getElementById("editorMsg");
+      try {
+        await updateDoc(doc(db, "players", p.id), { heartlessCount: increment(delta) });
+        p.heartlessCount = cur + delta;
+        renderReaper();
+        showToast(delta > 0 ? "🖤 Heartless — Confirmed" : "↩ Undone");
+        logAction(delta > 0
+          ? `${p.name} was made heartless (${p.heartlessCount}× total)`
+          : `${p.name}'s heartless count corrected to ${p.heartlessCount}`, p, "reaper");
+      } catch (e) {
+        msg.textContent = "Error: " + e.message;
+        msg.style.color = "#c0392b";
+      }
+    }
+
     async function deletePlayer() {
       if (!selectedPlayer) return;
       const confirmed = confirm(`Delete "${selectedPlayer.name}"? This cannot be undone.`);
       if (!confirmed) return;
       try {
         await deleteDoc(doc(db, "players", selectedPlayer.id));
+        logAction(`${selectedPlayer.name} was deleted`, selectedPlayer, "admin");
         document.getElementById("playerEditor").classList.add("hidden");
         selectedPlayer = null;
       } catch (e) {
@@ -535,6 +722,9 @@
       const rewards = [];
       for (let l = Math.max(fromLvl + 1, 2); l <= toLvl; l++) {
         if (LEVEL_REWARDS[l]) rewards.push(`<li>${levelIcon(l, "reward-img")}<span>${LEVEL_REWARDS[l]}</span></li>`);
+        if (l === 3) {
+          rewards.push(`<li><span class="reward-slot filled reward-emoji">🎴</span><span>Random Lvl 3 card</span></li>`);
+        }
         if (l === 4) {
           rewards.push(`<li><span class="reward-slot" id="guildRewardSlot">?</span><span>Guild sticker</span></li>`);
           rewards.push(`<li><span class="reward-slot filled reward-emoji">🃏</span><span>Guild ace card</span></li>`);
@@ -580,6 +770,8 @@
           await updateDoc(doc(db, "players", selectedPlayer.id), { guild: pendingGuildSticker });
           selectedPlayer.guild = pendingGuildSticker;
           document.getElementById("editorGuild").value = pendingGuildSticker;
+          logAction(`${selectedPlayer.name} joined the ${pendingGuildSticker} guild (Level 4 guild sticker)`, selectedPlayer, "guild");
+          updateLevelDisplay();
         } catch (e) {
           const msg = document.getElementById("editorMsg");
           msg.textContent = "Error saving guild: " + e.message;
@@ -601,8 +793,9 @@
       const duplicate = allPlayers.find(p => p.name.toLowerCase() === name.toLowerCase());
       if (duplicate) throw new Error(`"${duplicate.name}" is already enrolled.`);
       const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now();
-      const data = { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false, level3Quest: false };
+      const data = { name, questPoints: 0, glory: 0, guild: "None", secretQuest: false, level3Quest: false, heartlessCount: 0 };
       await setDoc(doc(db, "players", id), data);
+      logAction(`${name} enrolled`, { id, name }, "enrol");
       return { id, ...data };
     }
 
@@ -722,8 +915,6 @@
     }
 
     // ── Stats ──
-    const levelOf = p => calcLevel(p.questPoints ?? 0, p.secretQuest, p.level3Quest);
-
     function statCard(num, label, color = "#ffcc44", top = "", sub = "") {
       return `<div class="stat-card" style="border-color:${color}">
         ${top}
@@ -781,6 +972,12 @@
       const noGuild = ps.filter(p => !p.guild || p.guild === "None");
       const unassigned = noGuild.filter(p => levelOf(p) >= 4);
 
+      // Reaper / heartless
+      const totalHeartless = sum("heartlessCount");
+      const reaped = ps.filter(p => (p.heartlessCount ?? 0) > 0);
+      const topH = topBy("heartlessCount");
+      const heartlessTop = [...reaped].sort((a, b) => (b.heartlessCount ?? 0) - (a.heartlessCount ?? 0)).slice(0, 10);
+
       body.innerHTML = `
         <div class="stats-total">
           <div class="stats-total-num">${n}</div>
@@ -801,6 +998,7 @@
         <div class="stats-leaders">
           <div><span>Most quest points</span><strong>${(topQ.questPoints ?? 0) > 0 ? `${topQ.name} · ${topQ.questPoints} pts` : "—"}</strong></div>
           <div><span>Most glory</span><strong>${(topG.glory ?? 0) > 0 ? `${topG.name} · ${topG.glory} glory` : "—"}</strong></div>
+          <div><span>Most heartless</span><strong>${(topH.heartlessCount ?? 0) > 0 ? `${topH.name} · ${topH.heartlessCount}×` : "—"}</strong></div>
         </div>
 
         <div class="stats-heading">Adventurers by Level</div>
@@ -816,6 +1014,22 @@
             ⚠️ <strong>${unassigned.length}</strong> adventurer${unassigned.length > 1 ? "s are" : " is"} Level 4+ with no guild:
             ${unassigned.slice(0, 15).map(p => p.name).join(", ")}${unassigned.length > 15 ? "…" : ""}
           </div>` : ""}
+
+        <div class="stats-heading">💀 Reaper</div>
+        <div class="stats-grid">
+          ${statCard(totalHeartless, "Times Made Heartless", "#ff5566")}
+          ${statCard(reaped.length, "Adventurers Reaped", "#ff5566", "", pct(reaped.length))}
+          ${statCard(avg(totalHeartless), "Avg Heartless", "#ff5566")}
+          ${statCard(reaped.length ? (totalHeartless / reaped.length).toFixed(1) : "0", "Avg per Reaped", "#ff5566")}
+        </div>
+        ${heartlessTop.length ? `
+          <div class="stats-heading">Most Heartless</div>
+          <div class="stats-leaders">
+            ${heartlessTop.map((p, i) => `<div><span>${i + 1}. ${esc(p.name)}</span><strong>${p.heartlessCount}×</strong></div>`).join("")}
+          </div>` : ""}
+
+        <div class="stats-heading">Heartless Distribution</div>
+        <div class="dist">${distribution("heartlessCount", 1)}</div>
 
         <div class="stats-heading">Glory Distribution</div>
         <div class="dist">${distribution("glory", 10)}</div>
@@ -860,6 +1074,7 @@
       }
       try {
         await setDoc(settingsRef, { level2: t2, level3: t3 }, { merge: true });
+        logAction(`Admin set quest point thresholds: Level 2 at ${t2} pts, Level 3 at ${t3} pts`, null, "admin");
         msg.textContent = `✔ Saved — Level 2 at ${t2} pts, Level 3 at ${t3} pts.`;
         msg.style.color = "#66cc66";
         setTimeout(() => { msg.textContent = ""; }, 3000);
@@ -902,6 +1117,7 @@
           await batch.commit();
         }
         input.value = "";
+        logAction(`Admin cleared all ${count} adventurers`, null, "admin");
         msg.textContent = `✔ Deleted ${count} adventurers.`;
         msg.style.color = "#66cc66";
       } catch (e) {
@@ -925,6 +1141,7 @@
       if (tab === "guild")  renderGuildLeaderboard();
       if (tab === "admin")  renderAdmin();
       if (tab === "search") renderResults(document.getElementById("searchInput").value);
+      if (tab === "log")    renderLog();
     }
 
     document.addEventListener("DOMContentLoaded", () => {
@@ -948,10 +1165,11 @@
         btn.addEventListener("click", () => switchTab(btn.dataset.tab))
       );
       document.getElementById("searchInput").addEventListener("input", e => renderResults(e.target.value));
-      document.getElementById("editorPoints").addEventListener("input", () => {
-        if (!selectedPlayer) return;
-        updateLevelDisplay(parseInt(document.getElementById("editorPoints").value) || 0);
-      });
+      ["editorPoints", "editorSecretCount"].forEach(id =>
+        document.getElementById(id).addEventListener("input", () => { if (selectedPlayer) updateLevelDisplay(); }));
+      ["editorL3Quest", "editorGuild"].forEach(id =>
+        document.getElementById(id).addEventListener("change", () => { if (selectedPlayer) updateLevelDisplay(); }));
+      document.getElementById("logSearch").addEventListener("input", renderLog);
       document.getElementById("closeEditor").addEventListener("click", () => {
         document.getElementById("playerEditor").classList.add("hidden");
         selectedPlayer = null;
@@ -983,18 +1201,13 @@
       document.getElementById("awardGloryBtn").addEventListener("click", () => awardGlory("awardGloryBtn"));
 
 
-      // Per-tab save buttons
-      async function saveAndFlash(btnId) {
-        await savePlayer();
-        const btn = document.getElementById(btnId);
-        const msg = btn.nextElementSibling;
-        msg.textContent = "✔ Saved!";
-        msg.style.color = "#66cc66";
-        setTimeout(() => { msg.textContent = ""; }, 2000);
-      }
-      document.getElementById("saveBtnQuest").addEventListener("click", () => saveAndFlash("saveBtnQuest"));
-      document.getElementById("saveBtnGlory").addEventListener("click", () => saveAndFlash("saveBtnGlory"));
-      document.getElementById("saveBtnGuild").addEventListener("click", () => saveAndFlash("saveBtnGuild"));
+      // Per-tab Confirm buttons (all save every field and re-work out the level)
+      ["saveBtnQuest", "saveBtnGlory", "saveBtnGuild"].forEach(id => {
+        const btn = document.getElementById(id);
+        btn.addEventListener("click", () => confirmChanges(btn));
+      });
+      document.getElementById("heartlessBtn").addEventListener("click", () => changeHeartless(1));
+      document.getElementById("heartlessUndoBtn").addEventListener("click", () => changeHeartless(-1));
       document.getElementById("secretQuestBtn").addEventListener("click", addSecretQuest);
 
       // Admin
@@ -1328,6 +1541,52 @@
     .tab-save-msg { font-size: 15px; min-height: 20px; text-align: center; font-style: italic; margin-top: 8px; }
 
 
+    /* ── Confirmed pop-up ── */
+    #toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 300; pointer-events: none; opacity: 0;
+      padding: 18px 34px; border-radius: 14px; background: rgba(20,60,25,0.95); border: 2px solid #66cc66; color: #e8ffe8;
+      font-family: 'Cinzel', serif; font-size: 24px; font-weight: 700; letter-spacing: 1px; box-shadow: 0 0 40px rgba(80,200,80,0.45); white-space: nowrap; }
+    #toast.show { animation: toastFade 1s ease forwards; }
+    @keyframes toastFade { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.85); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 60% { opacity: 1; } 100% { opacity: 0; } }
+
+    /* ── Manual adjust extras ── */
+    .check-field { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 14px 16px; background: #0d0020; border: 2px solid #5533aa; border-radius: 8px; cursor: pointer; font-size: 17px; color: #e8d5ff; }
+    .check-field input { width: 24px; height: 24px; accent-color: #bb22bb; flex-shrink: 0; }
+    .check-field small, .label-note { color: #8877aa; font-size: 13px; text-transform: none; letter-spacing: 0; }
+    .revert-note { color: #ffaa44; font-size: 15px; line-height: 1.5; margin-bottom: 6px; min-height: 0; }
+    .lvl-pending { font-size: 14px; color: #ffaa44; font-style: italic; }
+
+    /* ── Reaper tab ── */
+    .editor-tab-btn[data-etab="reaper"] { border-top: 3px solid #882233; }
+    .editor-tab-btn[data-etab="reaper"].active { background: #220810; color: #ff5566; border-bottom: 3px solid #cc3344; }
+    .editor-tab-panel[data-epanel="reaper"] { border-left: 3px solid #882233; }
+    .panel-title.reaper-color { color: #ff5566; border-color: #882233; }
+    .heartless-display { text-align: center; background: #0d0020; border: 2px solid #882233; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .heartless-num { font-family: 'Cinzel', serif; font-size: 64px; font-weight: 700; color: #ff5566; line-height: 1.1; }
+    .heartless-label { font-family: 'Cinzel', serif; font-size: 13px; color: #aa88dd; text-transform: uppercase; letter-spacing: 1.5px; }
+    #heartlessBtn { width: 100%; padding: 22px 8px; background: linear-gradient(135deg, #2a0a10, #6a1020, #a01830); box-shadow: 0 2px 14px rgba(200,30,60,0.45); }
+    .heartless-undo { margin-top: 12px; font-size: 13px; padding: 10px; }
+    .heartless-undo:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* ── Log tab ── */
+    #logSearch { width: 100%; padding: 18px 20px; font-family: 'IM Fell English', serif; font-size: 20px; background: #0d0020; color: #f0e6d3; border: 2px solid #5533aa; border-radius: 8px; margin-bottom: 10px; outline: none; }
+    #logSearch::placeholder { color: #6655aa; }
+    #logSearch:focus { border-color: #aa66ff; box-shadow: 0 0 12px rgba(150,80,255,0.3); }
+    .log-count { font-size: 14px; color: #8877aa; font-style: italic; margin-bottom: 10px; }
+    #logList { list-style: none; border: 1px solid #3a2060; border-radius: 8px; overflow: hidden; background: #0d0020; }
+    .log-row { display: flex; gap: 14px; align-items: baseline; padding: 11px 14px; border-bottom: 1px solid #2a1050; border-left: 4px solid #5533aa; }
+    .log-row:last-child { border-bottom: none; }
+    .log-time { font-family: 'Cinzel', serif; font-size: 12px; color: #8877aa; white-space: nowrap; flex-shrink: 0; min-width: 150px; }
+    .log-text { font-size: 16px; color: #e8d5ff; }
+    .log-quest  { border-left-color: #ddaa00; }
+    .log-level  { border-left-color: #ffd700; }
+    .log-glory  { border-left-color: #3377cc; }
+    .log-guild  { border-left-color: #44cc44; }
+    .log-reaper { border-left-color: #cc3344; }
+    .log-edit   { border-left-color: #ff9933; }
+    .log-enrol  { border-left-color: #66cc99; }
+    .log-admin  { border-left-color: #999; }
+    @media (max-width: 520px) { .log-row { flex-direction: column; gap: 2px; } }
+
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0d0020; }
     ::-webkit-scrollbar-thumb { background: #5533aa; border-radius: 3px; }
@@ -1358,6 +1617,7 @@
   <button class="tab-btn active" data-tab="search">Players</button>
   <button class="tab-btn" data-tab="glory">Glory Board</button>
   <button class="tab-btn" data-tab="guild">Guild Board</button>
+  <button class="tab-btn" data-tab="log">Log</button>
   <button class="tab-btn tab-minor tab-cog" data-tab="admin" title="Admin settings">⚙️</button>
 </div>
 
@@ -1385,6 +1645,12 @@
     <thead><tr><th>#</th><th>Adventurer</th><th style="text-align:right">Quest Pts</th></tr></thead>
     <tbody id="guildBody"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
   </table>
+</div>
+
+<div class="tab-panel hidden" id="tab-log">
+  <input type="text" id="logSearch" placeholder="Search log… (name, action, day, time)" autocomplete="off" autocorrect="off" spellcheck="false">
+  <div id="logCount" class="log-count"></div>
+  <ul id="logList"><li class="empty">Loading…</li></ul>
 </div>
 
 <div class="tab-panel hidden" id="tab-admin">
@@ -1472,6 +1738,9 @@
       <button class="editor-tab-btn" data-etab="guild">
         <span class="editor-tab-icon">🛡️</span>Guild
       </button>
+      <button class="editor-tab-btn" data-etab="reaper">
+        <span class="editor-tab-icon">💀</span>Reaper
+      </button>
     </div>
 
     <!-- Quest Panel -->
@@ -1486,11 +1755,21 @@
         <button class="quest-btn" id="questBtn3"><span class="btn-tier">Tier 3</span><span class="btn-pts">+3 pts</span></button>
       </div>
       <button class="quest-btn" id="secretQuestBtn"><span class="btn-tier">Secret Quest</span><span class="btn-pts">🔐 +5 pts</span></button>
+      <div class="quest-btn-label">Manual Adjust</div>
       <div class="field">
         <label>Total Quest Points</label>
         <input type="number" id="editorPoints" min="0" placeholder="0">
       </div>
-      <button class="tab-save-btn" id="saveBtnQuest">Save</button>
+      <label class="check-field">
+        <input type="checkbox" id="editorL3Quest">
+        <span>Level 3 quest completed <small>(gives Level 4)</small></span>
+      </label>
+      <div class="field">
+        <label>Secret Quests Completed <small class="label-note">(1+ gives Level 5)</small></label>
+        <input type="number" id="editorSecretCount" min="0" placeholder="0">
+      </div>
+      <div id="revertNote" class="revert-note"></div>
+      <button class="tab-save-btn" id="saveBtnQuest">✔ Confirm Changes</button>
       <div class="tab-save-msg"></div>
     </div>
 
@@ -1509,7 +1788,7 @@
       <div class="glory-manual-row">
         <input type="number" id="editorGlory" min="0" placeholder="0">
       </div>
-      <button class="tab-save-btn" id="saveBtnGlory">Save</button>
+      <button class="tab-save-btn" id="saveBtnGlory">✔ Confirm Changes</button>
       <div class="tab-save-msg"></div>
     </div>
 
@@ -1527,8 +1806,20 @@
           <option value="Inventors">Inventors</option>
         </select>
       </div>
-      <button class="tab-save-btn" id="saveBtnGuild">Save</button>
+      <button class="tab-save-btn" id="saveBtnGuild">✔ Confirm Changes</button>
       <div class="tab-save-msg"></div>
+    </div>
+
+    <!-- Reaper Panel -->
+    <div class="editor-tab-panel hidden" data-epanel="reaper">
+      <div class="panel-title reaper-color">💀 Reaper</div>
+      <div class="heartless-display">
+        <div class="heartless-label">Made heartless</div>
+        <div class="heartless-num" id="heartlessCount">0</div>
+        <div class="heartless-label" id="heartlessTimes">times</div>
+      </div>
+      <button class="quest-btn" id="heartlessBtn"><span class="btn-pts">🖤 Heartless</span></button>
+      <button id="heartlessUndoBtn" class="admin-secondary-btn heartless-undo">↩ Undo (−1)</button>
     </div>
 
     <!-- Messages for every tab -->
@@ -1536,6 +1827,8 @@
 
   </div>
 </div>
+
+<div id="toast" aria-live="polite"></div>
 
 <div id="levelUpOverlay" class="hidden">
   <div class="levelup-card">
